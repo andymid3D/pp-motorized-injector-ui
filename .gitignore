@@ -1,0 +1,4 @@
+# macOS
+.DS_Store
+# EEZ Studio state
+*.eez-project-ui-state
