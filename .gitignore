@@ -9,3 +9,6 @@
 *.eez-project-ui-state
 # EEZ generated build cache
 **/.eez-project-build/
+
+# ESP-IDF build artifacts
+esp-idf/build/
