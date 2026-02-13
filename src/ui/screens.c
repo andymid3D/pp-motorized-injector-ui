@@ -1242,6 +1242,7 @@ void ui_create_groups() {
 //
 
 void create_screens() {
+    
     eez_flow_init_fonts(fonts, sizeof(fonts) / sizeof(ext_font_desc_t));
     
     // Initialize groups
@@ -1251,7 +1252,7 @@ void create_screens() {
     // Set default LVGL theme
     lv_display_t *dispp = lv_display_get_default();
     lv_theme_t *theme = lv_theme_default_init(dispp, lv_palette_main(LV_PALETTE_BLUE), lv_palette_main(LV_PALETTE_RED), true, LV_FONT_DEFAULT);
-    lv_disp_set_theme(dispp, theme);
+    lv_display_set_theme(dispp, theme);
     
     // Initialize screens
     eez_flow_init_screen_names(screen_names, sizeof(screen_names) / sizeof(const char *));

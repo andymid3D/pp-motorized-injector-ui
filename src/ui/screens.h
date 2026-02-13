@@ -14,7 +14,7 @@ enum ScreensEnum {
     SCREEN_ID_MAIN = 1,
     SCREEN_ID_MOULD_SETTINGS = 2,
     SCREEN_ID_COMMON_SETTINGS = 3,
-    _SCREEN_ID_LAST = 4
+    _SCREEN_ID_LAST = 3
 };
 
 typedef struct _objects_t {
