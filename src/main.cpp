@@ -14,6 +14,9 @@
 #include "ui/structs.h"
 #include "ui/vars.h"
 #include "ui/eez-flow.h"
+#include "ui/screens.h"
+#include "display_comms.h"
+#include "prd_ui.h"
 
 // Import BARREL_CAPACITY_MM from actions
 extern const float BARREL_CAPACITY_MM;
@@ -31,6 +34,14 @@ extern const float BARREL_CAPACITY_MM;
 
 
 #define TFT_BL 2
+
+#ifndef DISPLAY_UART_RX_PIN
+#define DISPLAY_UART_RX_PIN 44
+#endif
+
+#ifndef DISPLAY_UART_TX_PIN
+#define DISPLAY_UART_TX_PIN 43
+#endif
 
 // LovyanGFX display configuration for Elecrow 5" RGB display
 class LGFX : public lgfx::LGFX_Device
@@ -212,10 +223,46 @@ Serial.println(lcd.height());
   // Initialize touch
   touch_init();
   Serial.println("Touch initialized");
+
+  // Initialize controller UART link.
+  DisplayComms::begin(Serial2, DISPLAY_UART_RX_PIN, DISPLAY_UART_TX_PIN, 115200);
+  Serial.printf("Display UART init RX=%d TX=%d\n", DISPLAY_UART_RX_PIN, DISPLAY_UART_TX_PIN);
+
+  // Step 1 PRD runtime: replace Mould/Common screens only.
+  PrdUi::init();
+
+  DisplayComms::sendQueryState();
+  DisplayComms::sendQueryError();
+  DisplayComms::sendQueryMould();
+  DisplayComms::sendQueryCommon();
 }
 
 void loop() {
+  static int16_t lastScreen = -1;
+
   lv_timer_handler();
   ui_tick();
+
+  if (!PrdUi::isInitialized()) {
+    PrdUi::init();
+  }
+
+  DisplayComms::update();
+  DisplayComms::applyUiUpdates();
+  PrdUi::tick();
+
+  if (g_currentScreen != lastScreen) {
+    int screenId = g_currentScreen + 1;
+    if (screenId == SCREEN_ID_MOULD_SETTINGS) {
+      DisplayComms::sendQueryMould();
+    } else if (screenId == SCREEN_ID_COMMON_SETTINGS) {
+      DisplayComms::sendQueryCommon();
+    } else {
+      DisplayComms::sendQueryState();
+      DisplayComms::sendQueryError();
+    }
+    lastScreen = g_currentScreen;
+  }
+
   delay(5);
 }

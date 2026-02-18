@@ -9,6 +9,18 @@
 #include <cstdlib>
 #include <ctime>
 
+#ifndef ARDUINO
+#include "esp_log.h"
+#include "esp_timer.h"
+#endif
+
+#ifdef ARDUINO
+#define ACTIONS_LOGI(fmt, ...) do { Serial.printf(fmt "\n", ##__VA_ARGS__); } while(0)
+#else
+static const char *TAG = "actions";
+#define ACTIONS_LOGI(fmt, ...) ESP_LOGI(TAG, fmt, ##__VA_ARGS__)
+#endif
+
 // Maximum number of refills supported
 #define MAX_REFILLS 16
 
@@ -48,7 +60,7 @@ extern "C" {
  */
 void action_add_refill(lv_event_t * e) {
 
-    Serial.println("Add Refill action triggered. Current refill count: " + String(plungerState.refillCount));
+    ACTIONS_LOGI("Add Refill action triggered. Current refill count: %d", plungerState.refillCount);
 
     if (plungerState.refillCount >= MAX_REFILLS) {
         return;
