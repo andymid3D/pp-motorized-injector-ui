@@ -13,6 +13,26 @@
 
 namespace {
 
+#ifndef SCREEN_DIAG_ONLY
+#define SCREEN_DIAG_ONLY 0
+#endif
+
+#ifndef SCREEN_DIAG_ENABLE_PRD_MOULD_EDIT
+#if SCREEN_DIAG_ONLY
+#define SCREEN_DIAG_ENABLE_PRD_MOULD_EDIT 1
+#else
+#define SCREEN_DIAG_ENABLE_PRD_MOULD_EDIT 1
+#endif
+#endif
+
+#ifndef SCREEN_DIAG_ENABLE_PRD_COMMON
+#if SCREEN_DIAG_ONLY
+#define SCREEN_DIAG_ENABLE_PRD_COMMON 0
+#else
+#define SCREEN_DIAG_ENABLE_PRD_COMMON 1
+#endif
+#endif
+
 constexpr lv_coord_t LEFT_X = 8;
 // ... (rest of the file constants)
 
@@ -23,7 +43,7 @@ constexpr lv_coord_t LEFT_WIDTH = 114;
 constexpr lv_coord_t RIGHT_X = 130;
 constexpr lv_coord_t RIGHT_WIDTH = 350;
 constexpr lv_coord_t SCREEN_HEIGHT = 800;
-constexpr int MAX_MOULD_PROFILES = 8;
+constexpr int MAX_MOULD_PROFILES = 7;
 constexpr uint32_t DOUBLE_TAP_MS = 420;
 
 const char *COMMON_FIELD_NAMES[] = {
@@ -119,6 +139,13 @@ inline bool isObjReady(lv_obj_t *obj) { return obj && lv_obj_is_valid(obj); }
 
 inline void uiYield() { delay(0); }
 
+void logUiState(const char *tag) {
+  Serial.printf(
+      "PRD_UI[%s]: screen=%d count=%d selected=%d lastTapped=%d lastName='%s'\n",
+      tag ? tag : "?", static_cast<int>(g_currentScreen), ui.mouldProfileCount,
+      ui.selectedMould, ui.lastTappedMould, ui.lastMouldName);
+}
+
 inline void hideIfPresent(lv_obj_t *obj) {
   if (isObjReady(obj)) {
     lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
@@ -134,7 +161,7 @@ float turnsToCm3(float turns) {
 }
 
 void setButtonEnabled(lv_obj_t *button, bool enabled) {
-  if (!button) {
+  if (!isObjReady(button)) {
     return;
   }
   if (enabled) {
@@ -205,6 +232,8 @@ void hideLegacyWidgets() {
   hideIfPresent(objects.obj3);
   hideIfPresent(objects.obj4);
   hideIfPresent(objects.button_to_mould_settings_1);
+  // Legacy "Common Settings" button on main screen.
+  hideIfPresent(objects.button_to_mould_settings_3);
 
   // Common settings
   hideIfPresent(objects.obj6);
@@ -281,8 +310,19 @@ void updateLeftReadouts(const DisplayComms::Status &status) {
 
 void onNavigate(lv_event_t *event) {
   intptr_t target = reinterpret_cast<intptr_t>(lv_event_get_user_data(event));
+  Serial.printf("PRD_UI: onNavigate request target=%d from screen=%d\n",
+                static_cast<int>(target), static_cast<int>(g_currentScreen));
+  logUiState("onNavigate.before");
+#if !SCREEN_DIAG_ENABLE_PRD_COMMON
+  if (target == SCREEN_ID_COMMON_SETTINGS) {
+    Serial.println(
+        "PRD_UI: onNavigate blocked -> COMMON disabled in diagnostic mode");
+    target = SCREEN_ID_MAIN;
+  }
+#endif
   eez_flow_set_screen(static_cast<int16_t>(target), LV_SCR_LOAD_ANIM_NONE, 0,
                       0);
+  logUiState("onNavigate.after");
 }
 
 void onStateActionQueryState(lv_event_t *) { DisplayComms::sendQueryState(); }
@@ -304,6 +344,7 @@ void onMouldProfileSelect(lv_event_t *event) {
   ui.selectedMould = index;
 
   for (int i = 0; i < ui.mouldProfileCount; i++) {
+    Serial.printf("PRD_UI: rebuild idx=%d/%d\n", i + 1, ui.mouldProfileCount);
     if (!ui.mouldProfileButtons[i]) {
       continue;
     }
@@ -321,6 +362,9 @@ void onMouldProfileSelect(lv_event_t *event) {
   if (isDoubleTap) {
     setNotice(ui.mouldNotice, "Edit flow pending: use Send for now.");
   }
+  Serial.printf("PRD_UI: onMouldProfileSelect index=%d doubleTap=%d\n", index,
+                static_cast<int>(isDoubleTap));
+  logUiState("onMouldProfileSelect");
 }
 
 void syncMouldSendEditEnablement() {
@@ -333,16 +377,18 @@ void syncMouldSendEditEnablement() {
 }
 
 void rebuildMouldList() {
+  Serial.printf("PRD_UI: rebuildMouldList begin count=%d selected=%d\n", ui.mouldProfileCount, ui.selectedMould);
   if (!ui.mouldList) {
+    Serial.println("PRD_UI: rebuildMouldList aborted (mouldList null)");
+    return;
+  }
+  if (!isObjReady(ui.mouldList)) {
+    Serial.println("PRD_UI: rebuildMouldList aborted (mouldList invalid)");
     return;
   }
 
-  uint32_t childCount = lv_obj_get_child_count(ui.mouldList);
-  while (childCount > 0) {
-    lv_obj_t *child = lv_obj_get_child(ui.mouldList, childCount - 1);
-    lv_obj_delete(child);
-    childCount--;
-  }
+  lv_obj_clean(ui.mouldList);
+  Serial.println("PRD_UI: rebuildMouldList cleaned list");
 
   for (int i = 0; i < MAX_MOULD_PROFILES; i++) {
     ui.mouldProfileButtons[i] = nullptr;
@@ -350,9 +396,12 @@ void rebuildMouldList() {
 
   int y = 8;
   for (int i = 0; i < ui.mouldProfileCount; i++) {
-    const char *name = ui.mouldProfiles[i].name[0] != '\0'
-                           ? ui.mouldProfiles[i].name
-                           : "Unnamed Mould";
+    Serial.printf("PRD_UI: rebuild idx=%d/%d\n", i + 1, ui.mouldProfileCount);
+    char safeName[sizeof(ui.mouldProfiles[i].name)];
+    safeName[0] = '\0';
+    strncpy(safeName, ui.mouldProfiles[i].name, sizeof(safeName) - 1);
+    safeName[sizeof(safeName) - 1] = '\0';
+    const char *name = safeName[0] != '\0' ? safeName : "Unnamed Mould";
     lv_obj_t *button =
         createButton(ui.mouldList, name, 8, y, 286, 46, onMouldProfileSelect,
                      reinterpret_cast<void *>(static_cast<intptr_t>(i)));
@@ -363,12 +412,19 @@ void rebuildMouldList() {
                                   LV_PART_MAIN | LV_STATE_DEFAULT);
     ui.mouldProfileButtons[i] = button;
     y += 54;
+    if ((i & 1) == 1) {
+      uiYield();
+    }
   }
 
   if (ui.selectedMould >= ui.mouldProfileCount) {
     ui.selectedMould = -1;
   }
+  Serial.println("PRD_UI: rebuild after loop before sync");
   syncMouldSendEditEnablement();
+  Serial.println("PRD_UI: rebuild after sync");
+  logUiState("rebuildMouldList");
+  Serial.println("PRD_UI: rebuild end");
 }
 
 void onMouldSend(lv_event_t *) {
@@ -522,6 +578,7 @@ void onMouldEditSave(lv_event_t *) {
   lv_obj_add_flag(ui.rightPanelMouldEdit, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(ui.rightPanelMould, LV_OBJ_FLAG_HIDDEN);
   setNotice(ui.mouldNotice, "Profile saved.", lv_color_hex(0xff9be7a5));
+  logUiState("onMouldEditSave");
 }
 
 void onMouldEdit(lv_event_t *) {
@@ -593,8 +650,11 @@ void onMouldEdit(lv_event_t *) {
 }
 
 void onMouldNew(lv_event_t *) {
+  Serial.println("PRD_UI: onMouldNew begin");
+  logUiState("onMouldNew.begin");
   if (ui.mouldProfileCount >= MAX_MOULD_PROFILES) {
     setNotice(ui.mouldNotice, "Profile limit reached.", lv_color_hex(0xffff7a));
+    Serial.println("PRD_UI: onMouldNew limit reached");
     return;
   }
 
@@ -622,10 +682,17 @@ void onMouldNew(lv_event_t *) {
 
   ui.mouldProfiles[ui.mouldProfileCount] = newProfile;
   ui.mouldProfileCount++;
+  Serial.printf("PRD_UI: onMouldNew after append count=%d\n", ui.mouldProfileCount);
+  delay(0);
   rebuildMouldList();
+  Serial.println("PRD_UI: onMouldNew after rebuild");
+  delay(0);
   Storage::saveMoulds(ui.mouldProfiles, ui.mouldProfileCount);
+  Serial.println("PRD_UI: onMouldNew after save");
   setNotice(ui.mouldNotice, "Created local mould profile.",
             lv_color_hex(0xff9be7a5));
+  Serial.println("PRD_UI: onMouldNew after notice");
+  logUiState("onMouldNew");
 }
 
 void onMouldDelete(lv_event_t *) {
@@ -651,6 +718,7 @@ void onMouldDelete(lv_event_t *) {
   rebuildMouldList();
   Storage::saveMoulds(ui.mouldProfiles, ui.mouldProfileCount);
   setNotice(ui.mouldNotice, "Profile deleted.", lv_color_hex(0xfff0a0));
+  logUiState("onMouldDelete");
 }
 
 double commonFieldValue(const DisplayComms::CommonParams &common,
@@ -946,10 +1014,22 @@ void createMainPanel() {
                onNavigate,
                reinterpret_cast<void *>(
                    static_cast<intptr_t>(SCREEN_ID_MOULD_SETTINGS)));
+#if SCREEN_DIAG_ENABLE_PRD_COMMON
   createButton(ui.rightPanelMain, "Common Settings", 182, 720, 150, 58,
                onNavigate,
                reinterpret_cast<void *>(
                    static_cast<intptr_t>(SCREEN_ID_COMMON_SETTINGS)));
+#else
+  lv_obj_t *commonDisabled =
+      lv_label_create(ui.rightPanelMain);
+  lv_obj_set_pos(commonDisabled, 182, 734);
+  lv_obj_set_width(commonDisabled, 150);
+  lv_obj_set_style_text_align(commonDisabled, LV_TEXT_ALIGN_CENTER,
+                              LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_color(commonDisabled, lv_color_hex(0xff7a8896),
+                              LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_label_set_text(commonDisabled, "Common disabled");
+#endif
 
   ui.mainErrorLabel = lv_label_create(ui.rightPanelMain);
   lv_obj_set_pos(ui.mainErrorLabel, 18, 640);
@@ -1009,6 +1089,7 @@ void createMouldPanel() {
 }
 
 void createMouldEditPanel() {
+  Serial.println("PRD_UI: createMouldEditPanel begin");
   ui.rightPanelMouldEdit = createRightPanel(objects.mould_settings);
   if (!ui.rightPanelMouldEdit)
     return;
@@ -1070,6 +1151,9 @@ void createMouldEditPanel() {
 
     ui.mouldEditInputs[i] = input;
     y += 42;
+    if ((i & 1) == 1) {
+      uiYield();
+    }
   }
 
   createButton(ui.rightPanelMouldEdit, "Save", 18, 720, 150, 58,
@@ -1083,6 +1167,7 @@ void createMouldEditPanel() {
   lv_keyboard_set_mode(ui.mouldEditKeyboard, LV_KEYBOARD_MODE_NUMBER);
   lv_keyboard_set_textarea(ui.mouldEditKeyboard, nullptr);
   lv_obj_add_flag(ui.mouldEditKeyboard, LV_OBJ_FLAG_HIDDEN);
+  Serial.println("PRD_UI: createMouldEditPanel end");
 }
 
 void createCommonPanel() {
@@ -1280,14 +1365,28 @@ void init() {
 
   Serial.println("PRD_UI: init createMouldPanel");
   createMouldPanel();
+#if SCREEN_DIAG_ENABLE_PRD_MOULD_EDIT
+  Serial.println("PRD_UI: init createMouldEditPanel");
   createMouldEditPanel();
+#else
+  Serial.println("PRD_UI: init SCREEN_DIAG_ENABLE_PRD_MOULD_EDIT=0 -> skip edit");
+#endif
+#if SCREEN_DIAG_ENABLE_PRD_COMMON
+  Serial.println("PRD_UI: init createCommonPanel");
   createCommonPanel();
+#else
+  Serial.println("PRD_UI: init SCREEN_DIAG_ENABLE_PRD_COMMON=0 -> skip common");
+#endif
+  Serial.println("PRD_UI: init before uiYield after panel creation");
   uiYield();
+  Serial.println("PRD_UI: init before rebuildMouldList");
 
-  ui.mouldProfileCount = 1;
-  strncpy(ui.mouldProfiles[0].name, "Awaiting QUERY_MOULD",
-          sizeof(ui.mouldProfiles[0].name) - 1);
-  ui.mouldProfiles[0].name[sizeof(ui.mouldProfiles[0].name) - 1] = '\0';
+  if (ui.mouldProfileCount <= 0) {
+    ui.mouldProfileCount = 1;
+    strncpy(ui.mouldProfiles[0].name, "Awaiting QUERY_MOULD",
+            sizeof(ui.mouldProfiles[0].name) - 1);
+    ui.mouldProfiles[0].name[sizeof(ui.mouldProfiles[0].name) - 1] = '\0';
+  }
   rebuildMouldList();
   ui.selectedMould = -1;
 
@@ -1303,6 +1402,9 @@ void tick() {
   if (!ui.initialized) {
     return;
   }
+#if !SCREEN_DIAG_ENABLE_PRD_COMMON
+  return;
+#endif
 
   const DisplayComms::Status &status = DisplayComms::getStatus();
   const DisplayComms::MouldParams &mould = DisplayComms::getMould();
