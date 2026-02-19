@@ -18,7 +18,7 @@ constexpr lv_coord_t LEFT_WIDTH = 114;
 constexpr lv_coord_t RIGHT_X = 130;
 constexpr lv_coord_t RIGHT_WIDTH = 350;
 constexpr lv_coord_t SCREEN_HEIGHT = 800;
-constexpr int MAX_MOULD_PROFILES = 8;
+constexpr int MAX_MOULD_PROFILES = 16;
 constexpr uint32_t DOUBLE_TAP_MS = 420;
 
 const char *COMMON_FIELD_NAMES[] = {
@@ -78,6 +78,7 @@ struct UiState {
   lv_obj_t *mouldButtonEdit = nullptr;
   lv_obj_t *mouldButtonNew = nullptr;
   lv_obj_t *mouldButtonDelete = nullptr;
+  lv_obj_t *mouldDeleteOverlay = nullptr; // New confirmation overlay
   lv_obj_t *mouldProfileButtons[MAX_MOULD_PROFILES] = {};
   DisplayComms::MouldParams mouldProfiles[MAX_MOULD_PROFILES] = {};
   int mouldProfileCount = 0;
@@ -89,7 +90,6 @@ struct UiState {
   lv_obj_t *commonNotice = nullptr;
   lv_obj_t *commonButtonBack = nullptr;
   lv_obj_t *commonButtonSend = nullptr;
-  lv_obj_t *commonKeyboard = nullptr;
   lv_obj_t *commonInputs[COMMON_FIELD_COUNT] = {};
   lv_obj_t *commonDiscardOverlay = nullptr;
   bool commonDirty = false;
@@ -98,18 +98,21 @@ struct UiState {
   // Mould Edit State
   lv_obj_t *mouldEditScroll = nullptr;
   lv_obj_t *mouldEditInputs[MOULD_FIELD_COUNT] = {};
-  lv_obj_t *mouldEditKeyboard =
-      nullptr; // Separate keyboard for safety/simplicity
   DisplayComms::MouldParams editMouldSnapshot = {};
   bool mouldEditDirty = false;
 
+  lv_obj_t *sharedKeyboard = nullptr; // One keyboard to rule them all
   char lastMouldName[32] = {0};
   lv_obj_t *lastMainScreen = nullptr;
   lv_obj_t *lastMouldScreen = nullptr;
   lv_obj_t *lastCommonScreen = nullptr;
+  lv_obj_t *lastActiveScreen = nullptr;
 };
 
 UiState ui;
+
+// Forward declaration
+void createMouldEditPanel();
 
 inline bool isObjReady(lv_obj_t *obj) { return obj && lv_obj_is_valid(obj); }
 
@@ -172,7 +175,15 @@ void setNotice(lv_obj_t *label, const char *text,
 lv_obj_t *createButton(lv_obj_t *parent, const char *text, lv_coord_t x,
                        lv_coord_t y, lv_coord_t w, lv_coord_t h,
                        lv_event_cb_t cb, void *userData = nullptr) {
+  if (!isObjReady(parent))
+    return nullptr;
+
   lv_obj_t *button = lv_button_create(parent);
+  if (!button) {
+    Serial.println("PRD_UI: FAILED to create button!");
+    return nullptr;
+  }
+
   lv_obj_set_pos(button, x, y);
   lv_obj_set_size(button, w, h);
   lv_obj_set_style_radius(button, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -188,10 +199,12 @@ lv_obj_t *createButton(lv_obj_t *parent, const char *text, lv_coord_t x,
   }
 
   lv_obj_t *label = lv_label_create(button);
-  lv_label_set_text(label, text);
-  lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER,
-                              LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_center(label);
+  if (label) {
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER,
+                                LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_center(label);
+  }
   return button;
 }
 
@@ -213,6 +226,11 @@ lv_obj_t *createRightPanel(lv_obj_t *screen) {
     return nullptr;
   }
   lv_obj_t *panel = lv_obj_create(screen);
+  if (!panel) {
+    Serial.println(
+        "PRD_UI: createRightPanel FAILED - lv_obj_create returned NULL");
+    return nullptr;
+  }
   lv_obj_set_pos(panel, RIGHT_X, 0);
   lv_obj_set_size(panel, RIGHT_WIDTH, SCREEN_HEIGHT);
   lv_obj_set_style_bg_color(panel, lv_color_hex(0x11151a),
@@ -223,6 +241,115 @@ lv_obj_t *createRightPanel(lv_obj_t *screen) {
   lv_obj_set_style_radius(panel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
   return panel;
+}
+
+lv_obj_t *getSharedKeyboard(lv_obj_t *parent) {
+  if (!isObjReady(ui.sharedKeyboard)) {
+    Serial.println("PRD_UI: Creating shared keyboard on top layer.");
+    ui.sharedKeyboard = lv_keyboard_create(lv_layer_top());
+    lv_obj_set_size(ui.sharedKeyboard, RIGHT_WIDTH, 250);
+    lv_obj_set_pos(ui.sharedKeyboard, 0, SCREEN_HEIGHT - 250);
+    lv_obj_add_flag(ui.sharedKeyboard, LV_OBJ_FLAG_HIDDEN);
+  }
+  // DO NOT change parent. Keep it on lv_layer_top() for visibility across
+  // screens.
+  lv_obj_move_foreground(ui.sharedKeyboard);
+  return ui.sharedKeyboard;
+}
+
+void hideKeyboard() {
+  if (isObjReady(ui.sharedKeyboard)) {
+    lv_keyboard_set_textarea(ui.sharedKeyboard, nullptr);
+    lv_obj_add_flag(ui.sharedKeyboard, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void showKeyboard(lv_obj_t *textarea, lv_obj_t *screen) {
+  lv_obj_t *kb = getSharedKeyboard(screen);
+  if (!kb || !textarea)
+    return;
+  lv_keyboard_set_textarea(kb, textarea);
+  lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(kb);
+  lv_obj_scroll_to_view_recursive(textarea, LV_ANIM_ON);
+}
+
+void purgeMouldPanels() {
+  Serial.println("PRD_UI: Purging Mould Panels");
+  if (isObjReady(ui.sharedKeyboard)) {
+    lv_obj_set_parent(ui.sharedKeyboard, lv_layer_top());
+  }
+
+  if (isObjReady(ui.rightPanelMould))
+    lv_obj_delete_async(ui.rightPanelMould);
+  if (isObjReady(ui.rightPanelMouldEdit))
+    lv_obj_delete_async(ui.rightPanelMouldEdit);
+  if (isObjReady(ui.mouldDeleteOverlay))
+    lv_obj_delete_async(ui.mouldDeleteOverlay);
+  if (isObjReady(ui.posLabelMould))
+    lv_obj_delete_async(ui.posLabelMould);
+  if (isObjReady(ui.tempLabelMould))
+    lv_obj_delete_async(ui.tempLabelMould);
+
+  ui.rightPanelMould = nullptr;
+  ui.rightPanelMouldEdit = nullptr;
+  ui.mouldList = nullptr;
+  ui.mouldNotice = nullptr;
+  ui.mouldButtonBack = nullptr;
+  ui.mouldButtonSend = nullptr;
+  ui.mouldButtonEdit = nullptr;
+  ui.mouldButtonNew = nullptr;
+  ui.mouldButtonDelete = nullptr;
+  ui.mouldDeleteOverlay = nullptr;
+  ui.posLabelMould = nullptr;
+  ui.tempLabelMould = nullptr;
+  ui.mouldEditScroll = nullptr;
+  for (int i = 0; i < MAX_MOULD_PROFILES; i++)
+    ui.mouldProfileButtons[i] = nullptr;
+  for (int i = 0; i < MOULD_FIELD_COUNT; i++)
+    ui.mouldEditInputs[i] = nullptr;
+}
+
+void purgeCommonPanel() {
+  Serial.println("PRD_UI: Purging Common Panel");
+  if (isObjReady(ui.sharedKeyboard)) {
+    lv_obj_set_parent(ui.sharedKeyboard, lv_layer_top());
+  }
+
+  if (isObjReady(ui.rightPanelCommon))
+    lv_obj_delete_async(ui.rightPanelCommon);
+  if (isObjReady(ui.posLabelCommon))
+    lv_obj_delete_async(ui.posLabelCommon);
+  if (isObjReady(ui.tempLabelCommon))
+    lv_obj_delete_async(ui.tempLabelCommon);
+
+  ui.rightPanelCommon = nullptr;
+  ui.commonScroll = nullptr;
+  ui.commonNotice = nullptr;
+  ui.commonButtonBack = nullptr;
+  ui.commonButtonSend = nullptr;
+  ui.commonDiscardOverlay = nullptr;
+  ui.posLabelCommon = nullptr;
+  ui.tempLabelCommon = nullptr;
+  for (int i = 0; i < COMMON_FIELD_COUNT; i++)
+    ui.commonInputs[i] = nullptr;
+}
+
+void purgeMainPanel() {
+  if (isObjReady(ui.rightPanelMain))
+    lv_obj_delete_async(ui.rightPanelMain);
+  if (isObjReady(ui.posLabelMain))
+    lv_obj_delete_async(ui.posLabelMain);
+  if (isObjReady(ui.tempLabelMain))
+    lv_obj_delete_async(ui.tempLabelMain);
+
+  ui.rightPanelMain = nullptr;
+  ui.posLabelMain = nullptr;
+  ui.tempLabelMain = nullptr;
+  ui.stateValue = nullptr;
+  ui.stateAction1 = nullptr;
+  ui.stateAction2 = nullptr;
+  ui.mainErrorLabel = nullptr;
 }
 
 void updateErrorFrames(const DisplayComms::Status &status) {
@@ -352,13 +479,16 @@ void rebuildMouldList() {
     lv_obj_t *button =
         createButton(ui.mouldList, name, 8, y, 286, 46, onMouldProfileSelect,
                      reinterpret_cast<void *>(static_cast<intptr_t>(i)));
-    lv_obj_set_style_bg_color(button, lv_color_hex(0x26303a),
-                              LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_border_width(button, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_border_color(button, lv_color_hex(0x41505f),
-                                  LV_PART_MAIN | LV_STATE_DEFAULT);
-    ui.mouldProfileButtons[i] = button;
+    if (button) {
+      lv_obj_set_style_bg_color(button, lv_color_hex(0x26303a),
+                                LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_set_style_border_width(button, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_set_style_border_color(button, lv_color_hex(0x41505f),
+                                    LV_PART_MAIN | LV_STATE_DEFAULT);
+      ui.mouldProfileButtons[i] = button;
+    }
     y += 54;
+    uiYield(); // Give some time for display/tasks
   }
 
   if (ui.selectedMould >= ui.mouldProfileCount) {
@@ -389,62 +519,49 @@ void onMouldSend(lv_event_t *) {
 // ... Mould Edit Implementation ...
 
 void showMouldEditKeyboard(lv_obj_t *textarea) {
-  if (!ui.mouldEditKeyboard || !textarea) {
-    return;
-  }
-  // Ensure keyboard is on screen parent for visibility
-  if (isObjReady(objects.mould_settings)) {
-    lv_obj_set_parent(ui.mouldEditKeyboard, objects.mould_settings);
-  }
-  lv_keyboard_set_textarea(ui.mouldEditKeyboard, textarea);
-
-  // Check if text input (Name/Mode) or Number
-  // Simple heuristic: Name is index 0, Mode is index 13
-  // But wait, we don't have index here easily unless we store it.
-  // We can check userdata.
+  showKeyboard(textarea, objects.mould_settings);
   intptr_t index = reinterpret_cast<intptr_t>(lv_obj_get_user_data(textarea));
   if (MOULD_FIELD_TYPE[index] == 0) {
-    lv_keyboard_set_mode(ui.mouldEditKeyboard, LV_KEYBOARD_MODE_TEXT_LOWER);
+    lv_keyboard_set_mode(ui.sharedKeyboard, LV_KEYBOARD_MODE_TEXT_LOWER);
   } else {
-    lv_keyboard_set_mode(ui.mouldEditKeyboard, LV_KEYBOARD_MODE_NUMBER);
-  }
-
-  lv_obj_clear_flag(ui.mouldEditKeyboard, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_move_foreground(ui.mouldEditKeyboard);
-  lv_obj_scroll_to_view_recursive(textarea, LV_ANIM_ON);
-}
-
-void hideMouldEditKeyboard() {
-  if (ui.mouldEditKeyboard) {
-    lv_obj_add_flag(ui.mouldEditKeyboard, LV_OBJ_FLAG_HIDDEN);
+    lv_keyboard_set_mode(ui.sharedKeyboard, LV_KEYBOARD_MODE_NUMBER);
   }
 }
 
 void onMouldEditInputFocus(lv_event_t *event) {
   lv_event_code_t code = lv_event_get_code(event);
   lv_obj_t *target = lv_event_get_target_obj(event);
-
   if (code == LV_EVENT_CLICKED || code == LV_EVENT_FOCUSED) {
     showMouldEditKeyboard(target);
-    return;
-  }
-
-  if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL ||
-      code == LV_EVENT_DEFOCUSED) {
-    hideMouldEditKeyboard();
+  } else if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL ||
+             code == LV_EVENT_DEFOCUSED) {
+    hideKeyboard();
   }
 }
 
 void onMouldEditFieldChanged(lv_event_t *event) { ui.mouldEditDirty = true; }
 
 void onMouldEditCancel(lv_event_t *) {
-  hideMouldEditKeyboard();
-  lv_obj_add_flag(ui.rightPanelMouldEdit, LV_OBJ_FLAG_HIDDEN);
+  hideKeyboard();
+  // Safeguard keyboard
+  if (isObjReady(ui.sharedKeyboard)) {
+    lv_obj_set_parent(ui.sharedKeyboard, lv_layer_top());
+  }
+  // Destroy panel to free memory
+  if (ui.rightPanelMouldEdit) {
+    lv_obj_delete_async(ui.rightPanelMouldEdit);
+    ui.rightPanelMouldEdit = nullptr;
+    ui.mouldEditScroll = nullptr;
+    for (int i = 0; i < MOULD_FIELD_COUNT; i++)
+      ui.mouldEditInputs[i] = nullptr;
+  }
   lv_obj_clear_flag(ui.rightPanelMould, LV_OBJ_FLAG_HIDDEN);
+  Serial.printf("PRD_UI: MouldEditPanel Destroyed (Cancel). Heap: %d\n",
+                ESP.getFreeHeap());
 }
 
 void onMouldEditSave(lv_event_t *) {
-  hideMouldEditKeyboard();
+  hideKeyboard();
 
   // Save inputs back to snapshot -> ui.mouldProfiles
   DisplayComms::MouldParams &p = ui.mouldProfiles[ui.selectedMould];
@@ -517,15 +634,31 @@ void onMouldEditSave(lv_event_t *) {
   // If this is the active mould, update controller?
   // User must click "Send" explicitly from the list to update controller.
 
-  lv_obj_add_flag(ui.rightPanelMouldEdit, LV_OBJ_FLAG_HIDDEN);
+  // Destroy panel to free memory
+  if (ui.rightPanelMouldEdit) {
+    lv_obj_delete(ui.rightPanelMouldEdit);
+    ui.rightPanelMouldEdit = nullptr;
+    ui.mouldEditScroll = nullptr;
+    for (int i = 0; i < MOULD_FIELD_COUNT; i++)
+      ui.mouldEditInputs[i] = nullptr;
+  }
   lv_obj_clear_flag(ui.rightPanelMould, LV_OBJ_FLAG_HIDDEN);
   setNotice(ui.mouldNotice, "Profile saved.", lv_color_hex(0xff9be7a5));
+  Serial.printf("PRD_UI: MouldEditPanel Destroyed. Heap: %d\n",
+                ESP.getFreeHeap());
 }
 
 void onMouldEdit(lv_event_t *) {
   if (ui.selectedMould < 0 || ui.selectedMould >= ui.mouldProfileCount) {
     setNotice(ui.mouldNotice, "Select a mould first.", lv_color_hex(0xfff0a0));
     return;
+  }
+
+  // Create panel on demand if not exists
+  if (!isObjReady(ui.rightPanelMouldEdit)) {
+    Serial.printf("PRD_UI: Creating MouldEditPanel. Heap: %d\n",
+                  ESP.getFreeHeap());
+    createMouldEditPanel();
   }
 
   // Populate fields
@@ -588,6 +721,7 @@ void onMouldEdit(lv_event_t *) {
   // Show panel
   lv_obj_add_flag(ui.rightPanelMould, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(ui.rightPanelMouldEdit, LV_OBJ_FLAG_HIDDEN);
+  Serial.printf("PRD_UI: MouldEditPanel Shown. Heap: %d\n", ESP.getFreeHeap());
 }
 
 void onMouldNew(lv_event_t *) {
@@ -626,9 +760,12 @@ void onMouldNew(lv_event_t *) {
             lv_color_hex(0xff9be7a5));
 }
 
-void onMouldDelete(lv_event_t *) {
+void onMouldDeleteReal(lv_event_t *) {
+  if (ui.mouldDeleteOverlay) {
+    lv_obj_add_flag(ui.mouldDeleteOverlay, LV_OBJ_FLAG_HIDDEN);
+  }
+
   if (ui.selectedMould < 0 || ui.selectedMould >= ui.mouldProfileCount) {
-    setNotice(ui.mouldNotice, "Select a mould first.", lv_color_hex(0xfff0a0));
     return;
   }
 
@@ -648,7 +785,58 @@ void onMouldDelete(lv_event_t *) {
   ui.lastTappedMould = -1;
   rebuildMouldList();
   Storage::saveMoulds(ui.mouldProfiles, ui.mouldProfileCount);
-  setNotice(ui.mouldNotice, "Profile deleted.", lv_color_hex(0xfff0a0));
+  setNotice(ui.mouldNotice, "Profile deleted.", lv_color_hex(0xff9be7a5));
+}
+
+void onMouldDeleteCancel(lv_event_t *) {
+  if (ui.mouldDeleteOverlay) {
+    lv_obj_add_flag(ui.mouldDeleteOverlay, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void onMouldDelete(lv_event_t *) {
+  if (ui.selectedMould < 0 || ui.selectedMould >= ui.mouldProfileCount) {
+    setNotice(ui.mouldNotice, "Select a mould first.", lv_color_hex(0xfff0a0));
+    return;
+  }
+
+  // Create overlay on demand if needed
+  if (!isObjReady(ui.mouldDeleteOverlay)) {
+    ui.mouldDeleteOverlay = lv_obj_create(ui.rightPanelMould);
+    lv_obj_set_size(ui.mouldDeleteOverlay, RIGHT_WIDTH, SCREEN_HEIGHT);
+    lv_obj_set_pos(ui.mouldDeleteOverlay, 0, 0);
+    lv_obj_set_style_bg_color(ui.mouldDeleteOverlay, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(ui.mouldDeleteOverlay, LV_OPA_70, 0);
+    lv_obj_add_flag(ui.mouldDeleteOverlay, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *box = lv_obj_create(ui.mouldDeleteOverlay);
+    lv_obj_set_size(box, 280, 200);
+    lv_obj_center(box);
+    lv_obj_set_style_bg_color(box, lv_color_hex(0x2a3540), 0);
+    lv_obj_set_style_border_color(box, lv_color_hex(0x3a4a5a), 0);
+    lv_obj_set_style_border_width(box, 2, 0);
+
+    lv_obj_t *l = lv_label_create(box);
+    lv_label_set_text(l, "Delete profile?");
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+    lv_obj_align(l, LV_ALIGN_TOP_MID, 0, 10);
+
+    lv_obj_t *name = lv_label_create(box);
+    lv_label_set_text(name, ui.mouldProfiles[ui.selectedMould].name);
+    lv_obj_set_style_text_color(name, lv_color_hex(0xff9be7a5), 0);
+    lv_obj_align(name, LV_ALIGN_TOP_MID, 0, 45);
+
+    createButton(box, "Cancel", 10, 110, 110, 50, onMouldDeleteCancel);
+    lv_obj_t *btnDel =
+        createButton(box, "Delete", 130, 110, 110, 50, onMouldDeleteReal);
+    lv_obj_set_style_bg_color(btnDel, lv_color_hex(0xa83232), 0);
+  } else {
+    // Update name label in case it changed
+    lv_obj_t *box = lv_obj_get_child(ui.mouldDeleteOverlay, 0);
+    lv_obj_t *name = lv_obj_get_child(box, 1);
+    lv_label_set_text(name, ui.mouldProfiles[ui.selectedMould].name);
+    lv_obj_clear_flag(ui.mouldDeleteOverlay, LV_OBJ_FLAG_HIDDEN);
+  }
 }
 
 double commonFieldValue(const DisplayComms::CommonParams &common,
@@ -773,40 +961,14 @@ void syncCommonSendEnablement() {
                    ui.commonDirty && DisplayComms::isSafeForUpdate());
 }
 
-void hideCommonKeyboard() {
-  if (!ui.commonKeyboard) {
-    return;
-  }
-  lv_keyboard_set_textarea(ui.commonKeyboard, nullptr);
-  lv_obj_add_flag(ui.commonKeyboard, LV_OBJ_FLAG_HIDDEN);
-}
-
-void showCommonKeyboard(lv_obj_t *textarea) {
-  if (!ui.commonKeyboard || !textarea) {
-    return;
-  }
-  if (isObjReady(objects.common_settings)) {
-    lv_obj_set_parent(ui.commonKeyboard, objects.common_settings);
-  }
-  lv_keyboard_set_textarea(ui.commonKeyboard, textarea);
-  lv_keyboard_set_mode(ui.commonKeyboard, LV_KEYBOARD_MODE_NUMBER);
-  lv_obj_clear_flag(ui.commonKeyboard, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_move_foreground(ui.commonKeyboard);
-  lv_obj_scroll_to_view_recursive(textarea, LV_ANIM_ON);
-}
-
 void onCommonInputFocus(lv_event_t *event) {
   lv_event_code_t code = lv_event_get_code(event);
   lv_obj_t *target = lv_event_get_target_obj(event);
-
   if (code == LV_EVENT_CLICKED || code == LV_EVENT_FOCUSED) {
-    showCommonKeyboard(target);
-    return;
-  }
-
-  if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL ||
-      code == LV_EVENT_DEFOCUSED) {
-    hideCommonKeyboard();
+    showKeyboard(target, objects.common_settings);
+  } else if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL ||
+             code == LV_EVENT_DEFOCUSED) {
+    hideKeyboard();
   }
 }
 
@@ -856,7 +1018,7 @@ void showCommonDiscardOverlay(bool show) {
     return;
   }
   if (show) {
-    hideCommonKeyboard();
+    hideKeyboard();
     lv_obj_clear_flag(ui.commonDiscardOverlay, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(ui.commonDiscardOverlay);
   } else {
@@ -865,7 +1027,7 @@ void showCommonDiscardOverlay(bool show) {
 }
 
 void onCommonBack(lv_event_t *) {
-  hideCommonKeyboard();
+  hideKeyboard();
   if (ui.commonDirty) {
     showCommonDiscardOverlay(true);
     return;
@@ -875,14 +1037,14 @@ void onCommonBack(lv_event_t *) {
 
 void onCommonDiscardSend(lv_event_t *) {
   if (sendCommonFromInputs()) {
-    hideCommonKeyboard();
+    hideKeyboard();
     showCommonDiscardOverlay(false);
     eez_flow_set_screen(SCREEN_ID_MAIN, LV_SCR_LOAD_ANIM_NONE, 0, 0);
   }
 }
 
 void onCommonDiscardCancel(lv_event_t *) {
-  hideCommonKeyboard();
+  hideKeyboard();
   syncCommonInputsFromModel(DisplayComms::getCommon());
   ui.commonDirty = false;
   syncCommonSendEnablement();
@@ -1073,17 +1235,10 @@ void createMouldEditPanel() {
     y += 42;
   }
 
-  createButton(ui.rightPanelMouldEdit, "Save", 18, 720, 150, 58,
-               onMouldEditSave);
   createButton(ui.rightPanelMouldEdit, "Cancel", 182, 720, 150, 58,
                onMouldEditCancel);
-
-  ui.mouldEditKeyboard = lv_keyboard_create(ui.rightPanelMouldEdit);
-  lv_obj_set_pos(ui.mouldEditKeyboard, 0, SCREEN_HEIGHT - 250);
-  lv_obj_set_size(ui.mouldEditKeyboard, RIGHT_WIDTH, 250);
-  lv_keyboard_set_mode(ui.mouldEditKeyboard, LV_KEYBOARD_MODE_NUMBER);
-  lv_keyboard_set_textarea(ui.mouldEditKeyboard, nullptr);
-  lv_obj_add_flag(ui.mouldEditKeyboard, LV_OBJ_FLAG_HIDDEN);
+  uiYield();
+  Serial.println("PRD_UI: createMouldEditPanel complete.");
 }
 
 void createCommonPanel() {
@@ -1159,9 +1314,7 @@ void createCommonPanel() {
   ui.commonButtonSend = createButton(ui.rightPanelCommon, "Send", 182, 720, 150,
                                      58, onCommonSend);
 
-  ui.commonKeyboard =
-      nullptr; // Feature temporarily disabled to save memory/complexity
-  ui.commonDiscardOverlay = nullptr; // Feature temporarily disabled
+  ui.commonDiscardOverlay = nullptr; // Feature still disabled
   showCommonDiscardOverlay(false);
   uiYield();
   Serial.println("PRD_UI: createCommonPanel end");
@@ -1243,18 +1396,7 @@ void init() {
   hideLegacyWidgets();
   uiYield();
 
-  Serial.println("PRD_UI: init createLeftReadouts");
-  createLeftReadouts(objects.mould_settings, &ui.posLabelMould,
-                     &ui.tempLabelMould);
-  createLeftReadouts(objects.common_settings, &ui.posLabelCommon,
-                     &ui.tempLabelCommon);
-  uiYield();
-
-  Serial.println("PRD_UI: init createMouldPanel");
-  createMouldPanel();
-  // createMouldEditPanel();
-  // createCommonPanel();
-  uiYield();
+  // Panels and readouts are now created ON DEMAND in tick()
 
   if (ui.mouldProfileCount == 0) {
     ui.mouldProfileCount = 1;
@@ -1262,18 +1404,9 @@ void init() {
             sizeof(ui.mouldProfiles[0].name) - 1);
     ui.mouldProfiles[0].name[sizeof(ui.mouldProfiles[0].name) - 1] = '\0';
   }
-  rebuildMouldList();
-  ui.selectedMould = -1;
 
-  setButtonEnabled(ui.mouldButtonSend, false);
-  setButtonEnabled(ui.mouldButtonEdit, false);
-  setButtonEnabled(ui.commonButtonSend, false);
-
-  ui.lastMainScreen = objects.main;
-  ui.lastMouldScreen = objects.mould_settings;
-  ui.lastCommonScreen = objects.common_settings;
   ui.initialized = true;
-  Serial.println("PRD_UI: init complete");
+  Serial.println("PRD_UI: init basic state complete");
 }
 
 void tick() {
@@ -1281,42 +1414,63 @@ void tick() {
     return;
   }
 
-  // Lifecycle Management: Detect screen re-creation
-  if (isObjReady(objects.mould_settings) &&
-      objects.mould_settings != ui.lastMouldScreen) {
-    Serial.println("PRD_UI: Mould Screen recreated. Rebuilding panel.");
+  lv_obj_t *active = lv_screen_active();
+
+  // lifecycle Management: Purge panels when LEAVING a screen to save RAM
+  // Move this to the TOP to free memory before we try to build the next screen
+  if (ui.lastActiveScreen && active != ui.lastActiveScreen) {
+    if (ui.lastActiveScreen == objects.mould_settings)
+      purgeMouldPanels();
+    else if (ui.lastActiveScreen == objects.common_settings)
+      purgeCommonPanel();
+    else if (ui.lastActiveScreen == objects.main)
+      purgeMainPanel();
+    uiYield(); // Give some time for LVGL to process the async deletes
+    ui.lastActiveScreen = active;
+    return; // Wait for next tick to build the new screen (memory safety)
+  }
+  ui.lastActiveScreen = active;
+
+  // Lifecycle Management: Construct panels ONLY when visible
+  if (active == objects.main) {
+    if (!isObjReady(ui.rightPanelMain)) {
+      Serial.println("PRD_UI: Building Main Panel on demand.");
+      createLeftReadouts(objects.main, &ui.posLabelMain, &ui.tempLabelMain);
+      createMainPanel();
+      ui.lastMainScreen = objects.main;
+    }
+  } else if (active == objects.mould_settings) {
+    if (!isObjReady(ui.rightPanelMould)) {
+      Serial.println("PRD_UI: Building Mould Panel on demand.");
+      createLeftReadouts(objects.mould_settings, &ui.posLabelMould,
+                         &ui.tempLabelMould);
+      createMouldPanel();
+      rebuildMouldList();
+      ui.lastMouldScreen = objects.mould_settings;
+      uiYield();
+    }
+  } else if (active == objects.common_settings) {
+    if (!isObjReady(ui.rightPanelCommon)) {
+      Serial.println("PRD_UI: Building Common Panel on demand.");
+      createLeftReadouts(objects.common_settings, &ui.posLabelCommon,
+                         &ui.tempLabelCommon);
+      createCommonPanel();
+      ui.lastCommonScreen = objects.common_settings;
+      uiYield();
+    }
+  }
+  ui.lastActiveScreen = active;
+
+  // Handle pointer invalidation (extra safety)
+  if (!isObjReady(ui.rightPanelMould)) {
     ui.rightPanelMould = nullptr;
     ui.mouldList = nullptr;
-    ui.mouldNotice = nullptr;
-    ui.mouldButtonBack = nullptr;
-    ui.mouldButtonSend = nullptr;
-    ui.mouldButtonEdit = nullptr;
-    ui.mouldButtonNew = nullptr;
-    ui.mouldButtonDelete = nullptr;
-    for (int i = 0; i < MAX_MOULD_PROFILES; i++)
-      ui.mouldProfileButtons[i] = nullptr;
-
-    createMouldPanel();
-    // createMouldEditPanel(); // Keep disabled for now
-    rebuildMouldList();
-    ui.lastMouldScreen = objects.mould_settings;
   }
-
-  if (isObjReady(objects.common_settings) &&
-      objects.common_settings != ui.lastCommonScreen) {
-    Serial.println("PRD_UI: Common Screen recreated. Rebuilding panel.");
+  if (!isObjReady(ui.rightPanelCommon)) {
     ui.rightPanelCommon = nullptr;
-    ui.commonScroll = nullptr;
-    ui.commonNotice = nullptr;
-    ui.commonButtonBack = nullptr;
-    ui.commonButtonSend = nullptr;
-    ui.commonKeyboard = nullptr;
-    ui.commonDiscardOverlay = nullptr;
-    for (int i = 0; i < COMMON_FIELD_COUNT; i++)
-      ui.commonInputs[i] = nullptr;
-
-    createCommonPanel();
-    ui.lastCommonScreen = objects.common_settings;
+  }
+  if (!isObjReady(ui.rightPanelMain)) {
+    ui.rightPanelMain = nullptr;
   }
 
   const DisplayComms::Status &status = DisplayComms::getStatus();
@@ -1326,10 +1480,12 @@ void tick() {
   updateLeftReadouts(status);
   updateStateWidgets(status);
   updateErrorFrames(status);
-  updateMouldListFromComms(mould);
+  if (isObjReady(ui.mouldList)) {
+    updateMouldListFromComms(mould);
+  }
   syncMouldSendEditEnablement();
 
-  if (!ui.commonDirty) {
+  if (!ui.commonDirty && isObjReady(ui.rightPanelCommon)) {
     syncCommonInputsFromModel(common);
   }
   syncCommonSendEnablement();

@@ -148,7 +148,8 @@ void my_touch_read_cb(lv_indev_t *drv, lv_indev_data_t *data) {
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Motorized Injector HMI Starting...");
+  delay(3000); // Wait for Serial Monitor
+  Serial.println("Booting Motorized Injector UI...");
 
   // Initialize backlight
   pinMode(TFT_BL, OUTPUT);
