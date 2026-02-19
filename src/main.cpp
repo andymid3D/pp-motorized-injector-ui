@@ -4,19 +4,19 @@
  */
 
 #include <Arduino.h>
-#include <lvgl.h>
 #include <LovyanGFX.hpp>
-#include <lgfx/v1/platforms/esp32s3/Panel_RGB.hpp>
 #include <lgfx/v1/platforms/esp32s3/Bus_RGB.hpp>
+#include <lgfx/v1/platforms/esp32s3/Panel_RGB.hpp>
+#include <lvgl.h>
 
 // EEZ Studio generated UI files
-#include "ui/ui.h"
-#include "ui/structs.h"
-#include "ui/vars.h"
-#include "ui/eez-flow.h"
-#include "ui/screens.h"
 #include "display_comms.h"
 #include "prd_ui.h"
+#include "ui/eez-flow.h"
+#include "ui/screens.h"
+#include "ui/structs.h"
+#include "ui/ui.h"
+#include "ui/vars.h"
 
 // Import BARREL_CAPACITY_MM from actions
 extern const float BARREL_CAPACITY_MM;
@@ -32,7 +32,6 @@ extern const float BARREL_CAPACITY_MM;
 // Touch driver in touch.h using:
 //   #define TOUCH_GT911_ROTATION = ROTATION_RIGHT
 
-
 #define TFT_BL 2
 
 #ifndef DISPLAY_UART_RX_PIN
@@ -44,65 +43,63 @@ extern const float BARREL_CAPACITY_MM;
 #endif
 
 // LovyanGFX display configuration for Elecrow 5" RGB display
-class LGFX : public lgfx::LGFX_Device
-{
+class LGFX : public lgfx::LGFX_Device {
 public:
-  lgfx::Bus_RGB     _bus_instance;
-  lgfx::Panel_RGB   _panel_instance;
+  lgfx::Bus_RGB _bus_instance;
+  lgfx::Panel_RGB _panel_instance;
 
-  LGFX(void)
-  {
+  LGFX(void) {
     {
       auto cfg = _bus_instance.config();
       cfg.panel = &_panel_instance;
-      
-      cfg.pin_d0  = GPIO_NUM_8;   // B0
-      cfg.pin_d1  = GPIO_NUM_3;   // B1
-      cfg.pin_d2  = GPIO_NUM_46;  // B2
-      cfg.pin_d3  = GPIO_NUM_9;   // B3
-      cfg.pin_d4  = GPIO_NUM_1;   // B4
-      
-      cfg.pin_d5  = GPIO_NUM_5;   // G0
-      cfg.pin_d6  = GPIO_NUM_6;   // G1
-      cfg.pin_d7  = GPIO_NUM_7;   // G2
-      cfg.pin_d8  = GPIO_NUM_15;  // G3
-      cfg.pin_d9  = GPIO_NUM_16;  // G4
-      cfg.pin_d10 = GPIO_NUM_4;   // G5
-      
-      cfg.pin_d11 = GPIO_NUM_45;  // R0
-      cfg.pin_d12 = GPIO_NUM_48;  // R1
-      cfg.pin_d13 = GPIO_NUM_47;  // R2
-      cfg.pin_d14 = GPIO_NUM_21;  // R3
-      cfg.pin_d15 = GPIO_NUM_14;  // R4
+
+      cfg.pin_d0 = GPIO_NUM_8;  // B0
+      cfg.pin_d1 = GPIO_NUM_3;  // B1
+      cfg.pin_d2 = GPIO_NUM_46; // B2
+      cfg.pin_d3 = GPIO_NUM_9;  // B3
+      cfg.pin_d4 = GPIO_NUM_1;  // B4
+
+      cfg.pin_d5 = GPIO_NUM_5;  // G0
+      cfg.pin_d6 = GPIO_NUM_6;  // G1
+      cfg.pin_d7 = GPIO_NUM_7;  // G2
+      cfg.pin_d8 = GPIO_NUM_15; // G3
+      cfg.pin_d9 = GPIO_NUM_16; // G4
+      cfg.pin_d10 = GPIO_NUM_4; // G5
+
+      cfg.pin_d11 = GPIO_NUM_45; // R0
+      cfg.pin_d12 = GPIO_NUM_48; // R1
+      cfg.pin_d13 = GPIO_NUM_47; // R2
+      cfg.pin_d14 = GPIO_NUM_21; // R3
+      cfg.pin_d15 = GPIO_NUM_14; // R4
 
       cfg.pin_henable = GPIO_NUM_40;
-      cfg.pin_vsync   = GPIO_NUM_41;
-      cfg.pin_hsync   = GPIO_NUM_39;
-      cfg.pin_pclk    = GPIO_NUM_0;
-      cfg.freq_write  = 15000000;
+      cfg.pin_vsync = GPIO_NUM_41;
+      cfg.pin_hsync = GPIO_NUM_39;
+      cfg.pin_pclk = GPIO_NUM_0;
+      cfg.freq_write = 15000000;
 
-      cfg.hsync_polarity    = 0;
+      cfg.hsync_polarity = 0;
       cfg.hsync_front_porch = 8;
       cfg.hsync_pulse_width = 4;
-      cfg.hsync_back_porch  = 43;
-      
-      cfg.vsync_polarity    = 0;
+      cfg.hsync_back_porch = 43;
+
+      cfg.vsync_polarity = 0;
       cfg.vsync_front_porch = 8;
       cfg.vsync_pulse_width = 4;
-      cfg.vsync_back_porch  = 12;
+      cfg.vsync_back_porch = 12;
 
-      cfg.pclk_active_neg   = 1;
-      cfg.de_idle_high      = 0;
-      cfg.pclk_idle_high    = 0;
+      cfg.pclk_active_neg = 1;
+      cfg.de_idle_high = 0;
+      cfg.pclk_idle_high = 0;
 
       _bus_instance.config(cfg);
     }
     {
       auto cfg = _panel_instance.config();
-      cfg.memory_width  = TFT_WIDTH;
+      cfg.memory_width = TFT_WIDTH;
       cfg.memory_height = TFT_HEIGHT;
-      cfg.panel_width   = TFT_WIDTH;
-      cfg.panel_height  = TFT_HEIGHT;
+      cfg.panel_width = TFT_WIDTH;
+      cfg.panel_height = TFT_HEIGHT;
       cfg.offset_x = 0;
       cfg.offset_y = 0;
       _panel_instance.config(cfg);
@@ -114,9 +111,9 @@ public:
 
 LGFX lcd;
 
-
 // Touch panel configuration
-// Should be after lcd declaration as touch.h uses lcd for mapping touch coordinates
+// Should be after lcd declaration as touch.h uses lcd for mapping touch
+// coordinates
 #include "touch.h"
 
 // Display flushing callback for LVGL
@@ -124,38 +121,29 @@ void my_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
 
-  lv_draw_sw_rgb565_swap(px_map, w*h);
+  lv_draw_sw_rgb565_swap(px_map, w * h);
   lcd.pushImageDMA(area->x1, area->y1, w, h, (uint16_t *)px_map);
   lv_disp_flush_ready(disp);
 }
 
-uint32_t my_tick_cb() {
-  return (esp_timer_get_time() / 1000LL);
-}
+uint32_t my_tick_cb() { return (esp_timer_get_time() / 1000LL); }
 
-void my_touch_read_cb(lv_indev_t * drv, lv_indev_data_t * data) { 
-  
-  if (touch_has_signal())
-  {
-    if (touch_touched())
-    {
+void my_touch_read_cb(lv_indev_t *drv, lv_indev_data_t *data) {
+
+  if (touch_has_signal()) {
+    if (touch_touched()) {
       data->state = LV_INDEV_STATE_PRESSED;
 
       /*Set the coordinates*/
       data->point.x = touch_last_x;
       data->point.y = touch_last_y;
-    }
-    else if (touch_released())
-    {
+    } else if (touch_released()) {
       data->state = LV_INDEV_STATE_RELEASED;
     }
-  }
-  else
-  {
+  } else {
     data->state = LV_INDEV_STATE_RELEASED;
   }
   delay(15);
-
 }
 
 void setup() {
@@ -169,18 +157,18 @@ void setup() {
 
   // Initialize display
   lcd.init();
-  lcd.setRotation(1);  // set rotation to match LVGL's rotation
+  lcd.setRotation(1); // set rotation to match LVGL's rotation
   lcd.fillScreen(TFT_BLACK);
   delay(200);
 
-Serial.print("Display ");
-Serial.print(lcd.width());
-Serial.print("x");
-Serial.println(lcd.height());
+  Serial.print("Display ");
+  Serial.print(lcd.width());
+  Serial.print("x");
+  Serial.println(lcd.height());
 
   // Initialize LVGL
   lv_init();
-  
+
   /*Set millisecond-based tick source for LVGL so that it can track time.*/
   lv_tick_set_cb(my_tick_cb);
 
@@ -188,81 +176,91 @@ Serial.println(lcd.height());
   lv_display_t *display = lv_display_create(TFT_WIDTH, TFT_HEIGHT);
 
   /*Add rendering buffers to the screen.
-    *Here adding a smaller partial buffer assuming 16-bit (RGB565 color format)*/
-  static uint8_t buf[TFT_WIDTH * TFT_HEIGHT / 10 * 2]; /* x2 because of 16-bit color depth */
-  lv_display_set_buffers(display, buf, NULL, sizeof(buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
+   *Here adding a smaller partial buffer assuming 16-bit (RGB565 color format)*/
+  static uint8_t buf[TFT_WIDTH * TFT_HEIGHT / 10 *
+                     2]; /* x2 because of 16-bit color depth */
+  lv_display_set_buffers(display, buf, NULL, sizeof(buf),
+                         LV_DISPLAY_RENDER_MODE_PARTIAL);
 
-
-  /*Add a callback that can flush the content from `buf` when it has been rendered*/
+  /*Add a callback that can flush the content from `buf` when it has been
+   * rendered*/
   lv_display_set_flush_cb(display, my_flush_cb);
-
 
   // Set software rotation to portrait (90 degrees)
   lv_display_set_rotation(display, LV_DISPLAY_ROTATION_90);
 
   /*Create an input device for touch handling*/
-  lv_indev_t * indev = lv_indev_create();
+  lv_indev_t *indev = lv_indev_create();
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, my_touch_read_cb);
 
-  
   // Set as default display for LVGL 9.3
-  //lv_display_set_default(display);
-  
+  // lv_display_set_default(display);
+
   Serial.println("Display initialized");
 
   ui_init();
 
   // Sync max barrel capacity from native constant into EEZ global state
-  plunger_stateValue plungerStateValue(eez::flow::getGlobalVariable(FLOW_GLOBAL_VARIABLE_PLUNGER_STATE));
+  plunger_stateValue plungerStateValue(
+      eez::flow::getGlobalVariable(FLOW_GLOBAL_VARIABLE_PLUNGER_STATE));
   if (plungerStateValue) {
     plungerStateValue.max_barrel_capacity(BARREL_CAPACITY_MM);
   }
-
 
   // Initialize touch
   touch_init();
   Serial.println("Touch initialized");
 
-  // Initialize controller UART link.
-  DisplayComms::begin(Serial2, DISPLAY_UART_RX_PIN, DISPLAY_UART_TX_PIN, 115200);
-  Serial.printf("Display UART init RX=%d TX=%d\n", DISPLAY_UART_RX_PIN, DISPLAY_UART_TX_PIN);
+  // Initialize controller UART link. (DISABLED for Debugging due to Pin 43/44
+  // conflict with USB-Serial) DisplayComms::begin(Serial2, DISPLAY_UART_RX_PIN,
+  // DISPLAY_UART_TX_PIN, 115200); Serial.printf("Display UART init RX=%d
+  // TX=%d\n", DISPLAY_UART_RX_PIN, DISPLAY_UART_TX_PIN);
 
   // Step 1 PRD runtime: replace Mould/Common screens only.
   PrdUi::init();
 
-  DisplayComms::sendQueryState();
-  DisplayComms::sendQueryError();
-  DisplayComms::sendQueryMould();
-  DisplayComms::sendQueryCommon();
+  // DisplayComms::sendQueryState();
+  // DisplayComms::sendQueryError();
+  // DisplayComms::sendQueryMould();
+  // DisplayComms::sendQueryCommon();
 }
 
 void loop() {
   static int16_t lastScreen = -1;
+  static uint32_t lastHeartbeat = 0;
 
+  Serial.println("Loop start");
   lv_timer_handler();
+  Serial.println("Post lv_timer_handler");
   ui_tick();
+  Serial.println("Post ui_tick");
 
   if (!PrdUi::isInitialized()) {
     PrdUi::init();
   }
 
-  DisplayComms::update();
-  DisplayComms::applyUiUpdates();
+  // DisplayComms::update();
+  // DisplayComms::applyUiUpdates();
   PrdUi::tick();
+  Serial.println("Post PrdUi::tick");
 
   if (g_currentScreen != lastScreen) {
     int screenId = g_currentScreen + 1;
     if (screenId == SCREEN_ID_MOULD_SETTINGS) {
-      DisplayComms::sendQueryMould();
+      // DisplayComms::sendQueryMould();
     } else if (screenId == SCREEN_ID_COMMON_SETTINGS) {
-      DisplayComms::sendQueryCommon();
+      // DisplayComms::sendQueryCommon();
     } else {
-      DisplayComms::sendQueryState();
-      DisplayComms::sendQueryError();
+      // DisplayComms::sendQueryState();
+      // DisplayComms::sendQueryError();
     }
     lastScreen = g_currentScreen;
   }
 
+  if ((esp_timer_get_time() / 1000) - lastHeartbeat > 1000) {
+    Serial.println("Heartbeat");
+    lastHeartbeat = (esp_timer_get_time() / 1000);
+  }
   delay(5);
 }
