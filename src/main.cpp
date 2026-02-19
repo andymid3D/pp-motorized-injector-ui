@@ -231,11 +231,11 @@ void loop() {
   static int16_t lastScreen = -1;
   static uint32_t lastHeartbeat = 0;
 
-  Serial.println("Loop start");
+  // Serial.println("Loop start");
   lv_timer_handler();
-  Serial.println("Post lv_timer_handler");
+  // Serial.println("Post lv_timer_handler");
   ui_tick();
-  Serial.println("Post ui_tick");
+  // Serial.println("Post ui_tick");
 
   if (!PrdUi::isInitialized()) {
     PrdUi::init();
@@ -244,7 +244,7 @@ void loop() {
   // DisplayComms::update();
   // DisplayComms::applyUiUpdates();
   PrdUi::tick();
-  Serial.println("Post PrdUi::tick");
+  // Serial.println("Post PrdUi::tick");
 
   if (g_currentScreen != lastScreen) {
     int screenId = g_currentScreen + 1;
@@ -259,7 +259,7 @@ void loop() {
     lastScreen = g_currentScreen;
   }
 
-  if ((esp_timer_get_time() / 1000) - lastHeartbeat > 1000) {
+  if ((esp_timer_get_time() / 1000) - lastHeartbeat > 2000) {
     Serial.println("Heartbeat");
     lastHeartbeat = (esp_timer_get_time() / 1000);
   }
