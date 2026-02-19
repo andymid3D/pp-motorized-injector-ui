@@ -1,9 +1,9 @@
 # PRD — Motorized Injector Display (ESP32 HMI)
 
-**Version:** 1.1  
-**Date:** 2026-02-12  
-**Owner:** Andy / Codex  
-**Status:** Draft (approved direction; pending implementation)
+**Version:** 1.2
+**Date:** 2026-02-18
+**Owner:** Andy / Codex
+**Status:** Implementation Phase
 
 ---
 
@@ -22,6 +22,7 @@ Create a touchscreen UI for the motorized injector that:
 - **Display IC:** ILI6122 & ILI5960
 - **Input:** Touch only
 - **UI Framework:** LVGL v9.3 + EEZ Flow
+- **Connectivity:** UART (Display <-> Controller), USB (Power/Diagnostics)
 
 ---
 
@@ -63,22 +64,26 @@ Create a touchscreen UI for the motorized injector that:
 ## 5. Screens & Flows
 
 ### 5.1 Main
+- **Current Status**: Implemented. State, Position, Temp labels exist.
 - State name (wrap allowed; auto-height)
 - Up to **two state action buttons** below state
 - Navigation to Mould Settings & Common Settings
 
 ### 5.2 Mould Selection
+- **Current Status**: UI Implemented, but hangs on "New" due to missing persistence.
 - Scrollable list of local mould profiles
 - Buttons: **Back**, **Send**, **Edit**, **New**
 - **Send & Edit disabled until a mould is selected**
 - **Double‑tap OR Edit button** opens Mould Edit
 
 ### 5.3 Mould Edit
-- Editable fields
+- **Current Status**: Not Implemented (Buttons exist but show "Pending" notice).
+- Adjustable fields for the selected mould profile.
 - Buttons: **Save**, **Delete**, **Back**
 - Back without Save → overlay **Save** / **Cancel** (Cancel discards edits)
 
 ### 5.4 Common Settings
+- **Current Status**: UI Implemented. Keyboard logic exists but is not visible/functioning correctly.
 - On entry: **QUERY_COMMON** from controller
 - Editable list of common params
 - **Send disabled until change**
@@ -87,16 +92,15 @@ Create a touchscreen UI for the motorized injector that:
 ---
 
 ## 6. Storage
-- **Mould profiles:** Local storage (SD preferred, flash fallback)
+- **Mould profiles:** Local storage.
+    - **Primary:** LittleFS (Internal Flash) for reliability.
+    - **Secondary (Future):** SD Card for export/backup.
 - **Common params:** Remote-only (controller is source of truth)
-
-### SD Toggle & File Manager
-- If SD present: show **SD toggle button**
-- Minimal file manager: copy/move/delete between SD and flash
 
 ---
 
 ## 7. Refill Blocks (Plunger Graphic)
+- **Current Status**: Static graphic elements exist; dynamic update logic needed.
 - Display-side only
 - New block added after Refill
 - Block size derived from encoder position at end of first Compression
@@ -108,7 +112,7 @@ Create a touchscreen UI for the motorized injector that:
 ## 8. Data Model
 
 ### Display
-- `mould_profiles[]` (local)
+- `mould_profiles[]` (local, persisted in LittleFS)
 - `common_params` (transient view from controller)
 - `plunger_position_cm3`
 - `machine_state`
@@ -120,13 +124,12 @@ Create a touchscreen UI for the motorized injector that:
 ---
 
 ## 9. Implementation Notes
-- LVGL v9.3 (update from v8.3 in legacy code)
-- Keep error frame on all screens
-- State buttons only appear in allowed states
-- Position unit conversion to cm³ shown in UI
+- **Framework:** PlatformIO + Arduino + LVGL 9.3
+- **Do not modify working components:** Touch, Display, and Main screen layout are stable.
+- **Incremental Changes:** Add features one by one (Persistence -> Keyboard -> Mould Edit -> UART Refinement).
 
 ---
 
 ## 10. Open Questions
-None (PRD updated per 2026‑02‑12 answers)
+None.
 
