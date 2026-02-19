@@ -12,3 +12,4 @@
 
 # ESP-IDF build artifacts
 esp-idf/build/
+output.txt

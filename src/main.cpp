@@ -33,12 +33,24 @@ extern const float BARREL_CAPACITY_MM;
 #define SCREEN_DIAG_ENABLE_COMMS 0
 #endif
 
+#ifndef SCREEN_DIAG_ENABLE_PRD_COMMON
+#if SCREEN_DIAG_ONLY
+#define SCREEN_DIAG_ENABLE_PRD_COMMON 0
+#else
+#define SCREEN_DIAG_ENABLE_PRD_COMMON 1
+#endif
+#endif
+
 #ifndef SCREEN_DIAG_DISABLE_TOUCH_I2C
 #define SCREEN_DIAG_DISABLE_TOUCH_I2C 0
 #endif
 
 #ifndef SCREEN_DIAG_DISABLE_BACKLIGHT_I2C
 #define SCREEN_DIAG_DISABLE_BACKLIGHT_I2C 0
+#endif
+
+#ifndef BOOT_GUARD_DELAY_MS
+#define BOOT_GUARD_DELAY_MS 250
 #endif
 
 #define TFT_WIDTH 800
@@ -263,9 +275,10 @@ void my_touch_read_cb(lv_indev_t * drv, lv_indev_data_t * data) {
 
 void setup() {
   Serial.begin(115200);
-  delay(300);
   Serial.setDebugOutput(true);
   Serial.println("[BOOT] Motorized Injector HMI Starting...");
+  Serial.printf("[BOOT] startup guard delay: %u ms\n", (unsigned)BOOT_GUARD_DELAY_MS);
+  delay(BOOT_GUARD_DELAY_MS);
 
 #if !SCREEN_DIAG_DISABLE_TOUCH_I2C || !SCREEN_DIAG_DISABLE_BACKLIGHT_I2C
   // Force I2C in master mode explicitly (avoid accidental slave overloads)
@@ -361,18 +374,35 @@ void setup() {
 void loop() {
   static int16_t lastScreen = -1;
   static uint32_t lastHeartbeatMs = 0;
+  static uint32_t loopIters = 0;
+  static int loopPhase = 0;
 
+  loopPhase = 1; // before lv_timer_handler
   lv_timer_handler();
+  loopPhase = 2; // after lv_timer_handler
   ui_tick();
+  loopPhase = 3; // after ui_tick
+
+#if SCREEN_DIAG_ONLY && !SCREEN_DIAG_ENABLE_PRD_COMMON
+  if ((g_currentScreen + 1) == SCREEN_ID_COMMON_SETTINGS) {
+    Serial.println(
+        "[LOOP] Common screen disabled in diagnostics, redirecting to Main");
+    eez_flow_set_screen(SCREEN_ID_MAIN, LV_SCR_LOAD_ANIM_NONE, 0, 0);
+    delay(5);
+    return;
+  }
+#endif
 
 #if !SCREEN_DIAG_ONLY
   if (!PrdUi::isInitialized()) {
     PrdUi::init();
   }
 
+  loopPhase = 4; // before comms/prd tick
   DisplayComms::update();
   DisplayComms::applyUiUpdates();
   PrdUi::tick();
+  loopPhase = 5; // after comms/prd tick
 
   if (g_currentScreen != lastScreen) {
     int screenId = g_currentScreen + 1;
@@ -392,10 +422,12 @@ void loop() {
     PrdUi::init();
   }
 #if SCREEN_DIAG_ENABLE_COMMS
+  loopPhase = 4; // before comms/prd tick
   DisplayComms::update();
   DisplayComms::applyUiUpdates();
 #endif
   PrdUi::tick();
+  loopPhase = 5; // after prd tick
 #if SCREEN_DIAG_ENABLE_COMMS
   if (g_currentScreen != lastScreen) {
     int screenId = g_currentScreen + 1;
@@ -413,10 +445,13 @@ void loop() {
 #endif
 #endif
 
+  loopIters++;
   uint32_t now = ::millis();
   if (now - lastHeartbeatMs >= 1000) {
     lastHeartbeatMs = now;
-    Serial.printf("[LOOP] alive t=%lu screen=%d\n", (unsigned long)now, (int)g_currentScreen);
+    Serial.printf("[LOOP] alive t=%lu screen=%d phase=%d iters=%lu\n",
+                  (unsigned long)now, (int)g_currentScreen, loopPhase,
+                  (unsigned long)loopIters);
   }
 
   delay(5);
