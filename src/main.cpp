@@ -25,6 +25,14 @@ extern const float BARREL_CAPACITY_MM;
 #define SCREEN_DIAG_ONLY 0
 #endif
 
+#ifndef SCREEN_DIAG_ENABLE_PRD_UI
+#define SCREEN_DIAG_ENABLE_PRD_UI 0
+#endif
+
+#ifndef SCREEN_DIAG_ENABLE_COMMS
+#define SCREEN_DIAG_ENABLE_COMMS 0
+#endif
+
 #ifndef SCREEN_DIAG_DISABLE_TOUCH_I2C
 #define SCREEN_DIAG_DISABLE_TOUCH_I2C 0
 #endif
@@ -320,7 +328,23 @@ void setup() {
   }
 
 #if SCREEN_DIAG_ONLY
-  Serial.println("[BOOT] SCREEN_DIAG_ONLY=1 -> comms/prd_ui disabled");
+  Serial.println("[BOOT] SCREEN_DIAG_ONLY=1");
+#if SCREEN_DIAG_ENABLE_PRD_UI
+  Serial.println("[BOOT] SCREEN_DIAG_ENABLE_PRD_UI=1 -> PrdUi::init()");
+  PrdUi::init();
+#else
+  Serial.println("[BOOT] SCREEN_DIAG_ENABLE_PRD_UI=0 -> PrdUi disabled");
+#endif
+#if SCREEN_DIAG_ENABLE_COMMS
+  DisplayComms::begin(Serial2, DISPLAY_UART_RX_PIN, DISPLAY_UART_TX_PIN, 115200);
+  Serial.printf("[BOOT] Display UART init RX=%d TX=%d\n", DISPLAY_UART_RX_PIN, DISPLAY_UART_TX_PIN);
+  DisplayComms::sendQueryState();
+  DisplayComms::sendQueryError();
+  DisplayComms::sendQueryMould();
+  DisplayComms::sendQueryCommon();
+#else
+  Serial.println("[BOOT] SCREEN_DIAG_ENABLE_COMMS=0 -> DisplayComms disabled");
+#endif
 #else
   DisplayComms::begin(Serial2, DISPLAY_UART_RX_PIN, DISPLAY_UART_TX_PIN, 115200);
   Serial.printf("[BOOT] Display UART init RX=%d TX=%d\n", DISPLAY_UART_RX_PIN, DISPLAY_UART_TX_PIN);
@@ -362,6 +386,31 @@ void loop() {
     }
     lastScreen = g_currentScreen;
   }
+#else
+#if SCREEN_DIAG_ENABLE_PRD_UI
+  if (!PrdUi::isInitialized()) {
+    PrdUi::init();
+  }
+#if SCREEN_DIAG_ENABLE_COMMS
+  DisplayComms::update();
+  DisplayComms::applyUiUpdates();
+#endif
+  PrdUi::tick();
+#if SCREEN_DIAG_ENABLE_COMMS
+  if (g_currentScreen != lastScreen) {
+    int screenId = g_currentScreen + 1;
+    if (screenId == SCREEN_ID_MOULD_SETTINGS) {
+      DisplayComms::sendQueryMould();
+    } else if (screenId == SCREEN_ID_COMMON_SETTINGS) {
+      DisplayComms::sendQueryCommon();
+    } else {
+      DisplayComms::sendQueryState();
+      DisplayComms::sendQueryError();
+    }
+    lastScreen = g_currentScreen;
+  }
+#endif
+#endif
 #endif
 
   uint32_t now = ::millis();
@@ -372,4 +421,3 @@ void loop() {
 
   delay(5);
 }
-

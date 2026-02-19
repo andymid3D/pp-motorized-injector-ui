@@ -13,6 +13,18 @@
 
 namespace {
 
+#ifndef SCREEN_DIAG_ONLY
+#define SCREEN_DIAG_ONLY 0
+#endif
+
+#ifndef SCREEN_DIAG_ENABLE_PRD_FULL_UI
+#if SCREEN_DIAG_ONLY
+#define SCREEN_DIAG_ENABLE_PRD_FULL_UI 0
+#else
+#define SCREEN_DIAG_ENABLE_PRD_FULL_UI 1
+#endif
+#endif
+
 constexpr lv_coord_t LEFT_X = 8;
 // ... (rest of the file constants)
 
@@ -1280,8 +1292,15 @@ void init() {
 
   Serial.println("PRD_UI: init createMouldPanel");
   createMouldPanel();
+#if SCREEN_DIAG_ENABLE_PRD_FULL_UI
+  Serial.println("PRD_UI: init createMouldEditPanel");
   createMouldEditPanel();
+  Serial.println("PRD_UI: init createCommonPanel");
   createCommonPanel();
+#else
+  Serial.println(
+      "PRD_UI: init SCREEN_DIAG_ENABLE_PRD_FULL_UI=0 -> skip edit/common");
+#endif
   uiYield();
 
   ui.mouldProfileCount = 1;
@@ -1303,6 +1322,9 @@ void tick() {
   if (!ui.initialized) {
     return;
   }
+#if !SCREEN_DIAG_ENABLE_PRD_FULL_UI
+  return;
+#endif
 
   const DisplayComms::Status &status = DisplayComms::getStatus();
   const DisplayComms::MouldParams &mould = DisplayComms::getMould();

@@ -11,6 +11,27 @@ bool init() {
         return false;
     }
     Serial.println("LittleFS Mounted");
+
+    // Diagnostics: ensure storage is writable by creating an empty mould file.
+    if (!LittleFS.exists(MOULDS_FILE)) {
+        Serial.println("LittleFS: moulds.bin missing, creating...");
+        File file = LittleFS.open(MOULDS_FILE, FILE_WRITE);
+        if (!file) {
+            Serial.println("LittleFS: failed to create moulds.bin");
+            return true;
+        }
+        int initialCount = 0;
+        size_t written = file.write((const uint8_t *)&initialCount, sizeof(initialCount));
+        file.close();
+        if (written != sizeof(initialCount)) {
+            Serial.printf("LittleFS: moulds.bin short write (%u/%u)\n",
+                          static_cast<unsigned>(written),
+                          static_cast<unsigned>(sizeof(initialCount)));
+        } else {
+            Serial.println("LittleFS: moulds.bin created with empty header");
+        }
+    }
+
     return true;
 }
 
