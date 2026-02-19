@@ -146,6 +146,29 @@ void my_touch_read_cb(lv_indev_t *drv, lv_indev_data_t *data) {
   delay(15);
 }
 
+// GUI Task to handle LVGL and UI updates
+void guiTask(void *pvParameters) {
+  uint32_t lastHeartbeat = 0;
+  Serial.printf("PRD_UI: guiTask started on core %d\n", xPortGetCoreID());
+
+  while (1) {
+    lv_timer_handler();
+    ui_tick();
+
+    if (!PrdUi::isInitialized()) {
+      PrdUi::init();
+    }
+    PrdUi::tick();
+
+    if ((esp_timer_get_time() / 1000) - lastHeartbeat > 2000) {
+      Serial.println("Heartbeat (GUI)");
+      lastHeartbeat = (esp_timer_get_time() / 1000);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(5));
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(3000); // Wait for Serial Monitor
@@ -221,47 +244,21 @@ void setup() {
   // Step 1 PRD runtime: replace Mould/Common screens only.
   PrdUi::init();
 
-  // DisplayComms::sendQueryState();
-  // DisplayComms::sendQueryError();
-  // DisplayComms::sendQueryMould();
-  // DisplayComms::sendQueryCommon();
+  // Create GUI task on Core 1 with 16KB stack
+  xTaskCreatePinnedToCore(guiTask, "guiTask", 16384, NULL, 5, NULL, 1);
+  Serial.println("GUI Task Created");
 }
 
 void loop() {
   static int16_t lastScreen = -1;
-  static uint32_t lastHeartbeat = 0;
-
-  // Serial.println("Loop start");
-  lv_timer_handler();
-  // Serial.println("Post lv_timer_handler");
-  ui_tick();
-  // Serial.println("Post ui_tick");
-
-  if (!PrdUi::isInitialized()) {
-    PrdUi::init();
-  }
-
+  // Free up loop() for non-GUI tasks (e.g. comms)
   // DisplayComms::update();
   // DisplayComms::applyUiUpdates();
-  PrdUi::tick();
-  // Serial.println("Post PrdUi::tick");
 
   if (g_currentScreen != lastScreen) {
-    int screenId = g_currentScreen + 1;
-    if (screenId == SCREEN_ID_MOULD_SETTINGS) {
-      // DisplayComms::sendQueryMould();
-    } else if (screenId == SCREEN_ID_COMMON_SETTINGS) {
-      // DisplayComms::sendQueryCommon();
-    } else {
-      // DisplayComms::sendQueryState();
-      // DisplayComms::sendQueryError();
-    }
+    // This could still be tracked here if light-weight
     lastScreen = g_currentScreen;
   }
 
-  if ((esp_timer_get_time() / 1000) - lastHeartbeat > 2000) {
-    Serial.println("Heartbeat");
-    lastHeartbeat = (esp_timer_get_time() / 1000);
-  }
-  delay(5);
+  delay(100);
 }

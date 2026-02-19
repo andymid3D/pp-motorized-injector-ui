@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <lvgl.h>
 #include <vector>
 
 namespace {
@@ -56,7 +57,6 @@ struct UiState {
 
   lv_obj_t *rightPanelMain = nullptr;
   lv_obj_t *rightPanelMould = nullptr;
-  lv_obj_t *rightPanelMouldEdit = nullptr; // New
   lv_obj_t *rightPanelCommon = nullptr;
 
   lv_obj_t *posLabelMain = nullptr;
@@ -97,21 +97,21 @@ struct UiState {
   bool commonDirty = false;
   bool suppressCommonEvents = false;
 
-  // Mould Edit State
-  lv_obj_t *mouldEditScroll = nullptr;
-  lv_obj_t *mouldEditInputs[MOULD_FIELD_COUNT] = {};
-  DisplayComms::MouldParams editMouldSnapshot = {};
-  bool mouldEditDirty = false;
-
-  // Panels for scroll reset
-  lv_obj_t *activeScrollContainer = nullptr;
-
-  lv_obj_t *sharedKeyboard = nullptr; // One keyboard to rule them all
+  // Shared resources
+  lv_obj_t *sharedKeyboard = nullptr;
   char lastMouldName[32] = {0};
   lv_obj_t *lastMainScreen = nullptr;
   lv_obj_t *lastMouldScreen = nullptr;
   lv_obj_t *lastCommonScreen = nullptr;
   lv_obj_t *lastActiveScreen = nullptr;
+  lv_obj_t *activeScrollContainer = nullptr;
+
+  // Mould Edit State (Moved to end for isolation)
+  lv_obj_t *rightPanelMouldEdit = nullptr;
+  lv_obj_t *mouldEditScroll = nullptr;
+  lv_obj_t *mouldEditInputs[MOULD_FIELD_COUNT] = {};
+  bool mouldEditDirty = false;
+  bool inMouldEditPopulation = false;
 };
 
 UiState ui;
@@ -230,9 +230,20 @@ void hideLegacyWidgets() {
   hideIfPresent(objects.obj4);
   hideIfPresent(objects.button_to_mould_settings_1);
 
+  // Main screen legacy
+  hideIfPresent(objects.obj1);
+  hideIfPresent(objects.button_to_mould_settings);
+  hideIfPresent(objects.button_to_mould_settings_3);
+
   // Common settings
   hideIfPresent(objects.obj6);
   hideIfPresent(objects.button_to_mould_settings_2);
+
+  // Redundant numeric labels over plungers
+  hideIfPresent(objects.plunger_tip__obj0);
+  hideIfPresent(objects.obj0__obj0);
+  hideIfPresent(objects.obj2__obj0);
+  hideIfPresent(objects.obj5__obj0);
 }
 
 lv_obj_t *createRightPanel(lv_obj_t *screen) {
@@ -541,8 +552,10 @@ void onMouldProfileSelect(lv_event_t *event) {
                                 lv_color_hex(0x2d7dd2),
                                 LV_PART_MAIN | LV_STATE_DEFAULT);
     } else {
-      lv_obj_set_style_bg_color(ui.mouldProfileButtons[i],
-                                lv_color_hex(0x26303a),
+      // Index 0 has a distinct "Current" base color
+      lv_color_t baseColor =
+          (i == 0) ? lv_color_hex(0x2e4a3e) : lv_color_hex(0x26303a);
+      lv_obj_set_style_bg_color(ui.mouldProfileButtons[i], baseColor,
                                 LV_PART_MAIN | LV_STATE_DEFAULT);
     }
   }
@@ -558,7 +571,10 @@ void syncMouldSendEditEnablement() {
   setButtonEnabled(ui.mouldButtonEdit, hasSelection);
   setButtonEnabled(ui.mouldButtonSend,
                    hasSelection && DisplayComms::isSafeForUpdate());
-  setButtonEnabled(ui.mouldButtonDelete, hasSelection);
+
+  // Disable delete for Index 0 (Current)
+  bool canDelete = hasSelection && (ui.selectedMould != 0);
+  setButtonEnabled(ui.mouldButtonDelete, canDelete);
 }
 
 void syncMouldEditSaveEnablement() {
@@ -580,14 +596,24 @@ void rebuildMouldList() {
 
   int y = 8;
   for (int i = 0; i < ui.mouldProfileCount; i++) {
+    char nameBuf[48];
     const char *name = ui.mouldProfiles[i].name[0] != '\0'
                            ? ui.mouldProfiles[i].name
                            : "Unnamed Mould";
+
+    if (i == 0) {
+      snprintf(nameBuf, sizeof(nameBuf), "(Current) %s", name);
+    } else {
+      snprintf(nameBuf, sizeof(nameBuf), "%s", name);
+    }
+
     lv_obj_t *button =
-        createButton(ui.mouldList, name, 8, y, 286, 46, onMouldProfileSelect,
+        createButton(ui.mouldList, nameBuf, 8, y, 286, 46, onMouldProfileSelect,
                      reinterpret_cast<void *>(static_cast<intptr_t>(i)));
     if (button) {
-      lv_obj_set_style_bg_color(button, lv_color_hex(0x26303a),
+      lv_color_t baseColor =
+          (i == 0) ? lv_color_hex(0x2e4a3e) : lv_color_hex(0x26303a);
+      lv_obj_set_style_bg_color(button, baseColor,
                                 LV_PART_MAIN | LV_STATE_DEFAULT);
       lv_obj_set_style_border_width(button, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
       lv_obj_set_style_border_color(button, lv_color_hex(0x41505f),
@@ -652,6 +678,8 @@ void onMouldEditInputFocus(lv_event_t *event) {
 }
 
 void onMouldEditFieldChanged(lv_event_t *event) {
+  if (ui.inMouldEditPopulation)
+    return;
   ui.mouldEditDirty = true;
   syncMouldEditSaveEnablement();
 }
@@ -682,65 +710,86 @@ void onMouldEditSave(lv_event_t *) {
   DisplayComms::MouldParams &p = ui.mouldProfiles[ui.selectedMould];
 
   for (int i = 0; i < MOULD_FIELD_COUNT; i++) {
-    if (!ui.mouldEditInputs[i])
-      continue;
-    const char *txt = lv_textarea_get_text(ui.mouldEditInputs[i]);
-    if (!txt)
+    lv_obj_t *input = ui.mouldEditInputs[i];
+    if (!input)
       continue;
 
-    if (MOULD_FIELD_TYPE[i] == 0) { // String
+    if (i == 13) {
+      int idx = lv_dropdown_get_selected(input);
+      strcpy(p.mode, (idx == 1) ? "3D" : "2D");
+    } else {
+      const char *txt = lv_textarea_get_text(input);
+      if (!txt)
+        continue;
+
       if (i == 0) {
         strncpy(p.name, txt, sizeof(p.name) - 1);
         p.name[sizeof(p.name) - 1] = 0;
-      }
-      if (i == 13) {
-        strncpy(p.mode, txt, sizeof(p.mode) - 1);
-        p.mode[sizeof(p.mode) - 1] = 0;
-      }
-    } else { // Float
-      float val = atof(txt);
-      switch (i) {
-      case 1:
-        p.fillVolume = val;
-        break;
-      case 2:
-        p.fillSpeed = val;
-        break;
-      case 3:
-        p.fillPressure = val;
-        break;
-      case 4:
-        p.packVolume = val;
-        break;
-      case 5:
-        p.packSpeed = val;
-        break;
-      case 6:
-        p.packPressure = val;
-        break;
-      case 7:
-        p.packTime = val;
-        break;
-      case 8:
-        p.coolingTime = val;
-        break;
-      case 9:
-        p.fillAccel = val;
-        break;
-      case 10:
-        p.fillDecel = val;
-        break;
-      case 11:
-        p.packAccel = val;
-        break;
-      case 12:
-        p.packDecel = val;
-        break;
-      case 14:
-        p.injectTorque = val;
-        break;
+      } else {
+        float val = atof(txt);
+        switch (i) {
+        case 1:
+          p.fillVolume = val;
+          break;
+        case 2:
+          p.fillSpeed = val;
+          break;
+        case 3:
+          p.fillPressure = val;
+          break;
+        case 4:
+          p.packVolume = val;
+          break;
+        case 5:
+          p.packSpeed = val;
+          break;
+        case 6:
+          p.packPressure = val;
+          break;
+        case 7:
+          p.packTime = val;
+          break;
+        case 8:
+          p.coolingTime = val;
+          break;
+        case 9:
+          p.fillAccel = val;
+          break;
+        case 10:
+          p.fillDecel = val;
+          break;
+        case 11:
+          p.packAccel = val;
+          break;
+        case 12:
+          p.packDecel = val;
+          break;
+        case 14:
+          p.injectTorque = val;
+          break;
+        }
       }
     }
+  }
+
+  // VALIDATION
+  bool is3D = (strcmp(p.mode, "3D") == 0);
+  bool valid = true;
+  if (is3D) {
+    if (p.injectTorque <= 0.01f)
+      valid = false;
+  } else {
+    // 2D: fillVolume and fillSpeed must be > 0
+    if (p.fillVolume <= 0.01f || p.fillSpeed <= 0.01f)
+      valid = false;
+  }
+
+  if (!valid) {
+    setNotice(ui.mouldNotice,
+              is3D ? "3D requires Inject Torque > 0"
+                   : "2D requires Fill Volume/Speed > 0",
+              lv_color_hex(0xffff7a));
+    return;
   }
 
   Storage::saveMoulds(ui.mouldProfiles, ui.mouldProfileCount);
@@ -770,6 +819,9 @@ void onMouldEditSave(lv_event_t *) {
 }
 
 void onMouldEdit(lv_event_t *) {
+  if (ui.inMouldEditPopulation)
+    return;
+
   if (ui.selectedMould < 0 || ui.selectedMould >= ui.mouldProfileCount) {
     setNotice(ui.mouldNotice, "Select a mould first.", lv_color_hex(0xfff0a0));
     return;
@@ -777,74 +829,98 @@ void onMouldEdit(lv_event_t *) {
 
   // Create panel on demand if not exists
   if (!isObjReady(ui.rightPanelMouldEdit)) {
-    Serial.printf("PRD_UI: Creating MouldEditPanel. Heap: %d\n",
+    Serial.printf("PRD_UI: onMouldEdit - Creating panel. Heap: %d\n",
                   ESP.getFreeHeap());
+    // Clear inputs array explicitly
+    for (int i = 0; i < MOULD_FIELD_COUNT; i++)
+      ui.mouldEditInputs[i] = nullptr;
     createMouldEditPanel();
   }
 
+  if (!isObjReady(ui.rightPanelMouldEdit)) {
+    Serial.println("PRD_UI: ERROR - Failed to create MouldEditPanel!");
+    return;
+  }
+
   // Populate fields
+  ui.inMouldEditPopulation = true;
   DisplayComms::MouldParams &p = ui.mouldProfiles[ui.selectedMould];
+  Serial.printf("PRD_UI: Populating fields for mould %d (%s)\n",
+                ui.selectedMould, p.name);
+
   for (int i = 0; i < MOULD_FIELD_COUNT; i++) {
-    if (!ui.mouldEditInputs[i])
+    lv_obj_t *input = ui.mouldEditInputs[i];
+    if (!isObjReady(input)) {
+      Serial.printf("PRD_UI: Population field %d - NOT READY\n", i);
       continue;
-    char buf[32];
-    if (MOULD_FIELD_TYPE[i] == 0) { // String
-      const char *s = (i == 0) ? p.name : p.mode;
-      strncpy(buf, s, sizeof(buf));
-    } else { // Float
-      float val = 0.0f;
-      switch (i) {
-      case 1:
-        val = p.fillVolume;
-        break;
-      case 2:
-        val = p.fillSpeed;
-        break;
-      case 3:
-        val = p.fillPressure;
-        break;
-      case 4:
-        val = p.packVolume;
-        break;
-      case 5:
-        val = p.packSpeed;
-        break;
-      case 6:
-        val = p.packPressure;
-        break;
-      case 7:
-        val = p.packTime;
-        break;
-      case 8:
-        val = p.coolingTime;
-        break;
-      case 9:
-        val = p.fillAccel;
-        break;
-      case 10:
-        val = p.fillDecel;
-        break;
-      case 11:
-        val = p.packAccel;
-        break;
-      case 12:
-        val = p.packDecel;
-        break;
-      case 14:
-        val = p.injectTorque;
-        break;
-      }
-      snprintf(buf, sizeof(buf), "%.2f", val);
     }
-    lv_textarea_set_text(ui.mouldEditInputs[i], buf);
+
+    if (i == 13) {
+      int dropdownIdx = (p.mode[0] == '3') ? 1 : 0;
+      lv_dropdown_set_selected(input, dropdownIdx);
+    } else {
+      char buf[32] = {0};
+      if (MOULD_FIELD_TYPE[i] == 0) { // String
+        snprintf(buf, sizeof(buf), "%s", (i == 0) ? p.name : "");
+      } else { // Float
+        float val = 0.0f;
+        switch (i) {
+        case 1:
+          val = p.fillVolume;
+          break;
+        case 2:
+          val = p.fillSpeed;
+          break;
+        case 3:
+          val = p.fillPressure;
+          break;
+        case 4:
+          val = p.packVolume;
+          break;
+        case 5:
+          val = p.packSpeed;
+          break;
+        case 6:
+          val = p.packPressure;
+          break;
+        case 7:
+          val = p.packTime;
+          break;
+        case 8:
+          val = p.coolingTime;
+          break;
+        case 9:
+          val = p.fillAccel;
+          break;
+        case 10:
+          val = p.fillDecel;
+          break;
+        case 11:
+          val = p.packAccel;
+          break;
+        case 12:
+          val = p.packDecel;
+          break;
+        case 14:
+          val = p.injectTorque;
+          break;
+        }
+        snprintf(buf, sizeof(buf), "%.2f", val);
+      }
+
+      Serial.printf("PRD_UI: Field %d (%p) -> '%s'\n", i, input, buf);
+      lv_textarea_set_text(input, buf);
+    }
   }
 
   // Show panel
   ui.mouldEditDirty = false;
   syncMouldEditSaveEnablement();
-  lv_obj_add_flag(ui.rightPanelMould, LV_OBJ_FLAG_HIDDEN);
+
   lv_obj_clear_flag(ui.rightPanelMouldEdit, LV_OBJ_FLAG_HIDDEN);
-  Serial.printf("PRD_UI: MouldEditPanel Shown. Heap: %d\n", ESP.getFreeHeap());
+  lv_obj_add_flag(ui.rightPanelMould, LV_OBJ_FLAG_HIDDEN);
+  Serial.println("PRD_UI: onMouldEdit COMPLETE.");
+  ui.inMouldEditPopulation = false;
 }
 
 void onMouldNew(lv_event_t *) {
@@ -1205,6 +1281,8 @@ void createMainPanel() {
   lv_obj_set_pos(title, 18, 12);
   lv_obj_set_style_text_font(title, &lv_font_montserrat_24,
                              LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xffffffff),
+                              LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_label_set_text(title, "Main");
 
   lv_obj_t *stateHeader = lv_label_create(ui.rightPanelMain);
@@ -1307,6 +1385,10 @@ void createMouldEditPanel() {
   lv_label_set_text(title, "Edit Mould");
 
   ui.mouldEditScroll = lv_obj_create(ui.rightPanelMouldEdit);
+  if (!ui.mouldEditScroll) {
+    Serial.println("PRD_UI: FAILED to create mouldEditScroll");
+    return;
+  }
   lv_obj_set_pos(ui.mouldEditScroll, 18, 54);
   lv_obj_set_size(ui.mouldEditScroll, RIGHT_WIDTH - 36, 598);
   lv_obj_set_style_bg_color(ui.mouldEditScroll, lv_color_hex(0x1a222b),
@@ -1322,37 +1404,69 @@ void createMouldEditPanel() {
   int y = 6;
   for (int i = 0; i < MOULD_FIELD_COUNT; i++) {
     lv_obj_t *label = lv_label_create(ui.mouldEditScroll);
+    if (!label) {
+      Serial.printf("PRD_UI: FAILED to create label for mould field %d\n", i);
+      y += 42;
+      continue;
+    }
     lv_obj_set_pos(label, 4, y + 8);
     lv_obj_set_size(label, 160, LV_SIZE_CONTENT);
     lv_label_set_text(label, MOULD_FIELD_NAMES[i]);
 
-    lv_obj_t *input = lv_textarea_create(ui.mouldEditScroll);
+    lv_obj_t *input = nullptr;
+    bool isDropdown = (i == 13);
+
+    if (isDropdown) {
+      input = lv_dropdown_create(ui.mouldEditScroll);
+      if (input) {
+        lv_dropdown_set_options(input, "2D\n3D");
+        lv_obj_set_size(input, 130, 42);
+      }
+    } else {
+      input = lv_textarea_create(ui.mouldEditScroll);
+      if (input) {
+        lv_textarea_set_one_line(input, true);
+        lv_textarea_set_max_length(input, (i == 0) ? 20 : 10);
+        const char *accepted =
+            (MOULD_FIELD_TYPE[i] == 0) ? nullptr : "0123456789.-";
+        if (accepted)
+          lv_textarea_set_accepted_chars(input, accepted);
+        lv_textarea_set_text(input, (MOULD_FIELD_TYPE[i] == 0) ? "" : "0");
+        lv_obj_set_style_text_align(input, LV_TEXT_ALIGN_RIGHT,
+                                    LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_size(input, 130, 34);
+      }
+    }
+
+    if (!input) {
+      Serial.printf("PRD_UI: FAILED to create input for field %d\n", i);
+      y += 42;
+      continue;
+    }
     lv_obj_set_pos(input, 168, y);
-    lv_obj_set_size(input, 130, 34);
-    lv_textarea_set_one_line(input, true);
-    lv_textarea_set_max_length(input, (i == 0) ? 20 : 10);
-
-    const char *accepted =
-        (MOULD_FIELD_TYPE[i] == 0) ? nullptr : "0123456789.-";
-    if (accepted)
-      lv_textarea_set_accepted_chars(input, accepted);
-
-    lv_textarea_set_text(input, (MOULD_FIELD_TYPE[i] == 0) ? "" : "0");
-    lv_obj_set_style_text_align(input, LV_TEXT_ALIGN_RIGHT,
-                                LV_PART_MAIN | LV_STATE_DEFAULT);
 
     lv_obj_set_user_data(input,
                          reinterpret_cast<void *>(static_cast<intptr_t>(i)));
-    lv_obj_add_event_cb(input, onMouldEditInputFocus, LV_EVENT_CLICKED,
-                        nullptr);
+
+    // Only textareas should trigger the on-screen keyboard
+    if (!isDropdown) {
+      lv_obj_add_event_cb(input, onMouldEditInputFocus, LV_EVENT_CLICKED,
+                          nullptr);
+    }
+
     lv_obj_add_event_cb(input, onMouldEditFieldChanged, LV_EVENT_VALUE_CHANGED,
                         nullptr);
-    lv_obj_add_event_cb(input, onMouldEditFieldChanged, LV_EVENT_READY,
-                        nullptr);
-    lv_obj_add_event_cb(input, onMouldEditFieldChanged, LV_EVENT_CANCEL,
-                        nullptr);
+
+    if (!isDropdown) {
+      lv_obj_add_event_cb(input, onMouldEditFieldChanged, LV_EVENT_READY,
+                          nullptr);
+      lv_obj_add_event_cb(input, onMouldEditFieldChanged, LV_EVENT_CANCEL,
+                          nullptr);
+    }
 
     ui.mouldEditInputs[i] = input;
+    Serial.printf("PRD_UI: createMouldEditPanel stored input %d at %p\n", i,
+                  input);
     y += 42;
   }
 
