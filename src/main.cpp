@@ -1,6 +1,6 @@
 /**
  * Motorized Injector HMI - EEZ Studio LVGL Project
- * Main PlatformIO sketch for ESP32 with Elecrow 5" HMI display
+ * Main PlatformIO sketch for ESP32 with profile-selectable RGB display
  */
 
 #include <Arduino.h>
@@ -21,17 +21,52 @@
 // Import BARREL_CAPACITY_MM from actions
 extern const float BARREL_CAPACITY_MM;
 
-// Physical display dimensions:
 #define TFT_WIDTH 800
 #define TFT_HEIGHT 480
-// Screen is rotated 90 degrees clockwise, so width and height are swapped
-// We should change LCD hardware using:
-//   lcd.setRotation(1);
-// LVGL using:
-//   lv_display_set_rotation(display, LV_DISPLAY_ROTATION_90);
-// Touch driver in touch.h using:
-//   #define TOUCH_GT911_ROTATION = ROTATION_RIGHT
 
+#if defined(DISPLAY_PROFILE_WAVESHARE_4_3B)
+
+#define TFT_BL -1
+
+#ifndef DISPLAY_UART_RX_PIN
+#define DISPLAY_UART_RX_PIN 43
+#endif
+
+#ifndef DISPLAY_UART_TX_PIN
+#define DISPLAY_UART_TX_PIN 44
+#endif
+
+#define RGB_PIN_D0 GPIO_NUM_14
+#define RGB_PIN_D1 GPIO_NUM_38
+#define RGB_PIN_D2 GPIO_NUM_18
+#define RGB_PIN_D3 GPIO_NUM_17
+#define RGB_PIN_D4 GPIO_NUM_10
+#define RGB_PIN_D5 GPIO_NUM_39
+#define RGB_PIN_D6 GPIO_NUM_0
+#define RGB_PIN_D7 GPIO_NUM_45
+#define RGB_PIN_D8 GPIO_NUM_48
+#define RGB_PIN_D9 GPIO_NUM_47
+#define RGB_PIN_D10 GPIO_NUM_21
+#define RGB_PIN_D11 GPIO_NUM_1
+#define RGB_PIN_D12 GPIO_NUM_2
+#define RGB_PIN_D13 GPIO_NUM_42
+#define RGB_PIN_D14 GPIO_NUM_41
+#define RGB_PIN_D15 GPIO_NUM_40
+
+#define RGB_PIN_HENABLE GPIO_NUM_5
+#define RGB_PIN_VSYNC GPIO_NUM_3
+#define RGB_PIN_HSYNC GPIO_NUM_46
+#define RGB_PIN_PCLK GPIO_NUM_7
+
+#define RGB_FREQ_WRITE 16000000
+#define RGB_HSYNC_FRONT 8
+#define RGB_HSYNC_PULSE 4
+#define RGB_HSYNC_BACK 8
+#define RGB_VSYNC_FRONT 8
+#define RGB_VSYNC_PULSE 4
+#define RGB_VSYNC_BACK 8
+
+#else
 
 #define TFT_BL 2
 
@@ -43,7 +78,39 @@ extern const float BARREL_CAPACITY_MM;
 #define DISPLAY_UART_TX_PIN 43
 #endif
 
-// LovyanGFX display configuration for Elecrow 5" RGB display
+#define RGB_PIN_D0 GPIO_NUM_8
+#define RGB_PIN_D1 GPIO_NUM_3
+#define RGB_PIN_D2 GPIO_NUM_46
+#define RGB_PIN_D3 GPIO_NUM_9
+#define RGB_PIN_D4 GPIO_NUM_1
+#define RGB_PIN_D5 GPIO_NUM_5
+#define RGB_PIN_D6 GPIO_NUM_6
+#define RGB_PIN_D7 GPIO_NUM_7
+#define RGB_PIN_D8 GPIO_NUM_15
+#define RGB_PIN_D9 GPIO_NUM_16
+#define RGB_PIN_D10 GPIO_NUM_4
+#define RGB_PIN_D11 GPIO_NUM_45
+#define RGB_PIN_D12 GPIO_NUM_48
+#define RGB_PIN_D13 GPIO_NUM_47
+#define RGB_PIN_D14 GPIO_NUM_21
+#define RGB_PIN_D15 GPIO_NUM_14
+
+#define RGB_PIN_HENABLE GPIO_NUM_40
+#define RGB_PIN_VSYNC GPIO_NUM_41
+#define RGB_PIN_HSYNC GPIO_NUM_39
+#define RGB_PIN_PCLK GPIO_NUM_0
+
+#define RGB_FREQ_WRITE 15000000
+#define RGB_HSYNC_FRONT 8
+#define RGB_HSYNC_PULSE 4
+#define RGB_HSYNC_BACK 43
+#define RGB_VSYNC_FRONT 8
+#define RGB_VSYNC_PULSE 4
+#define RGB_VSYNC_BACK 12
+
+#endif
+
+// LovyanGFX display configuration
 class LGFX : public lgfx::LGFX_Device
 {
 public:
@@ -55,41 +122,41 @@ public:
     {
       auto cfg = _bus_instance.config();
       cfg.panel = &_panel_instance;
-      
-      cfg.pin_d0  = GPIO_NUM_8;   // B0
-      cfg.pin_d1  = GPIO_NUM_3;   // B1
-      cfg.pin_d2  = GPIO_NUM_46;  // B2
-      cfg.pin_d3  = GPIO_NUM_9;   // B3
-      cfg.pin_d4  = GPIO_NUM_1;   // B4
-      
-      cfg.pin_d5  = GPIO_NUM_5;   // G0
-      cfg.pin_d6  = GPIO_NUM_6;   // G1
-      cfg.pin_d7  = GPIO_NUM_7;   // G2
-      cfg.pin_d8  = GPIO_NUM_15;  // G3
-      cfg.pin_d9  = GPIO_NUM_16;  // G4
-      cfg.pin_d10 = GPIO_NUM_4;   // G5
-      
-      cfg.pin_d11 = GPIO_NUM_45;  // R0
-      cfg.pin_d12 = GPIO_NUM_48;  // R1
-      cfg.pin_d13 = GPIO_NUM_47;  // R2
-      cfg.pin_d14 = GPIO_NUM_21;  // R3
-      cfg.pin_d15 = GPIO_NUM_14;  // R4
 
-      cfg.pin_henable = GPIO_NUM_40;
-      cfg.pin_vsync   = GPIO_NUM_41;
-      cfg.pin_hsync   = GPIO_NUM_39;
-      cfg.pin_pclk    = GPIO_NUM_0;
-      cfg.freq_write  = 15000000;
+      cfg.pin_d0  = RGB_PIN_D0;
+      cfg.pin_d1  = RGB_PIN_D1;
+      cfg.pin_d2  = RGB_PIN_D2;
+      cfg.pin_d3  = RGB_PIN_D3;
+      cfg.pin_d4  = RGB_PIN_D4;
+
+      cfg.pin_d5  = RGB_PIN_D5;
+      cfg.pin_d6  = RGB_PIN_D6;
+      cfg.pin_d7  = RGB_PIN_D7;
+      cfg.pin_d8  = RGB_PIN_D8;
+      cfg.pin_d9  = RGB_PIN_D9;
+      cfg.pin_d10 = RGB_PIN_D10;
+
+      cfg.pin_d11 = RGB_PIN_D11;
+      cfg.pin_d12 = RGB_PIN_D12;
+      cfg.pin_d13 = RGB_PIN_D13;
+      cfg.pin_d14 = RGB_PIN_D14;
+      cfg.pin_d15 = RGB_PIN_D15;
+
+      cfg.pin_henable = RGB_PIN_HENABLE;
+      cfg.pin_vsync   = RGB_PIN_VSYNC;
+      cfg.pin_hsync   = RGB_PIN_HSYNC;
+      cfg.pin_pclk    = RGB_PIN_PCLK;
+      cfg.freq_write  = RGB_FREQ_WRITE;
 
       cfg.hsync_polarity    = 0;
-      cfg.hsync_front_porch = 8;
-      cfg.hsync_pulse_width = 4;
-      cfg.hsync_back_porch  = 43;
-      
+      cfg.hsync_front_porch = RGB_HSYNC_FRONT;
+      cfg.hsync_pulse_width = RGB_HSYNC_PULSE;
+      cfg.hsync_back_porch  = RGB_HSYNC_BACK;
+
       cfg.vsync_polarity    = 0;
-      cfg.vsync_front_porch = 8;
-      cfg.vsync_pulse_width = 4;
-      cfg.vsync_back_porch  = 12;
+      cfg.vsync_front_porch = RGB_VSYNC_FRONT;
+      cfg.vsync_pulse_width = RGB_VSYNC_PULSE;
+      cfg.vsync_back_porch  = RGB_VSYNC_BACK;
 
       cfg.pclk_active_neg   = 1;
       cfg.de_idle_high      = 0;
@@ -114,17 +181,35 @@ public:
 
 LGFX lcd;
 
-
 // Touch panel configuration
-// Should be after lcd declaration as touch.h uses lcd for mapping touch coordinates
+// Must come after lcd declaration as touch.h may map against display dimensions
 #include "touch.h"
+
+static void panel_backlight_on() {
+#if defined(DISPLAY_PROFILE_WAVESHARE_4_3B)
+  // Waveshare 4.3B: backlight through CH422G I2C expander
+  uint8_t v = 0x01;
+  Wire.beginTransmission(0x24);
+  Wire.write(v);
+  Wire.endTransmission();
+
+  v = 0x1E;
+  Wire.beginTransmission(0x38);
+  Wire.write(v);
+  Wire.endTransmission();
+#else
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, HIGH);
+#endif
+}
 
 // Display flushing callback for LVGL
 void my_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
+  (void)disp;
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
 
-  lv_draw_sw_rgb565_swap(px_map, w*h);
+  lv_draw_sw_rgb565_swap(px_map, w * h);
   lcd.pushImageDMA(area->x1, area->y1, w, h, (uint16_t *)px_map);
   lv_disp_flush_ready(disp);
 }
@@ -133,102 +218,81 @@ uint32_t my_tick_cb() {
   return (esp_timer_get_time() / 1000LL);
 }
 
-void my_touch_read_cb(lv_indev_t * drv, lv_indev_data_t * data) { 
-  
-  if (touch_has_signal())
-  {
-    if (touch_touched())
-    {
-      data->state = LV_INDEV_STATE_PRESSED;
+void my_touch_read_cb(lv_indev_t * drv, lv_indev_data_t * data) {
 
-      /*Set the coordinates*/
+  if (touch_has_signal()) {
+    if (touch_touched()) {
+      data->state = LV_INDEV_STATE_PRESSED;
       data->point.x = touch_last_x;
       data->point.y = touch_last_y;
-    }
-    else if (touch_released())
-    {
+    } else if (touch_released()) {
       data->state = LV_INDEV_STATE_RELEASED;
     }
-  }
-  else
-  {
+  } else {
     data->state = LV_INDEV_STATE_RELEASED;
   }
-  delay(15);
 
+  delay(15);
 }
 
 void setup() {
   Serial.begin(115200);
   Serial.println("Motorized Injector HMI Starting...");
 
-  // Initialize backlight
-  pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, HIGH);
+  // Initialize shared I2C bus once before any backlight/touch transaction
+  Wire.begin(TOUCH_GT911_SDA, TOUCH_GT911_SCL);
+
+#if defined(DISPLAY_PROFILE_WAVESHARE_4_3B)
+  Serial.println("Display profile: Waveshare 4.3B");
+#else
+  Serial.println("Display profile: Elecrow 5\"");
+#endif
+
+  panel_backlight_on();
   Serial.println("Backlight ON");
 
   // Initialize display
   lcd.init();
-  lcd.setRotation(1);  // set rotation to match LVGL's rotation
+  lcd.setRotation(1);
   lcd.fillScreen(TFT_BLACK);
   delay(200);
 
-Serial.print("Display ");
-Serial.print(lcd.width());
-Serial.print("x");
-Serial.println(lcd.height());
+  Serial.print("Display ");
+  Serial.print(lcd.width());
+  Serial.print("x");
+  Serial.println(lcd.height());
 
   // Initialize LVGL
   lv_init();
-  
-  /*Set millisecond-based tick source for LVGL so that it can track time.*/
   lv_tick_set_cb(my_tick_cb);
 
-  /*Create a display where screens and widgets can be added*/
   lv_display_t *display = lv_display_create(TFT_WIDTH, TFT_HEIGHT);
 
-  /*Add rendering buffers to the screen.
-    *Here adding a smaller partial buffer assuming 16-bit (RGB565 color format)*/
-  static uint8_t buf[TFT_WIDTH * TFT_HEIGHT / 10 * 2]; /* x2 because of 16-bit color depth */
+  static uint8_t buf[TFT_WIDTH * TFT_HEIGHT / 10 * 2];
   lv_display_set_buffers(display, buf, NULL, sizeof(buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
 
-
-  /*Add a callback that can flush the content from `buf` when it has been rendered*/
   lv_display_set_flush_cb(display, my_flush_cb);
-
-
-  // Set software rotation to portrait (90 degrees)
   lv_display_set_rotation(display, LV_DISPLAY_ROTATION_90);
 
-  /*Create an input device for touch handling*/
   lv_indev_t * indev = lv_indev_create();
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, my_touch_read_cb);
 
-  
-  // Set as default display for LVGL 9.3
-  //lv_display_set_default(display);
-  
   Serial.println("Display initialized");
 
   ui_init();
 
-  // Sync max barrel capacity from native constant into EEZ global state
   plunger_stateValue plungerStateValue(eez::flow::getGlobalVariable(FLOW_GLOBAL_VARIABLE_PLUNGER_STATE));
   if (plungerStateValue) {
     plungerStateValue.max_barrel_capacity(BARREL_CAPACITY_MM);
   }
 
-
-  // Initialize touch
   touch_init();
   Serial.println("Touch initialized");
 
-  // Initialize controller UART link.
   DisplayComms::begin(Serial2, DISPLAY_UART_RX_PIN, DISPLAY_UART_TX_PIN, 115200);
   Serial.printf("Display UART init RX=%d TX=%d\n", DISPLAY_UART_RX_PIN, DISPLAY_UART_TX_PIN);
 
-  // Step 1 PRD runtime: replace Mould/Common screens only.
   PrdUi::init();
 
   DisplayComms::sendQueryState();
