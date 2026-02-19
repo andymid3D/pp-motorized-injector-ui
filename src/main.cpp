@@ -21,6 +21,18 @@
 // Import BARREL_CAPACITY_MM from actions
 extern const float BARREL_CAPACITY_MM;
 
+#ifndef SCREEN_DIAG_ONLY
+#define SCREEN_DIAG_ONLY 0
+#endif
+
+#ifndef SCREEN_DIAG_DISABLE_TOUCH_I2C
+#define SCREEN_DIAG_DISABLE_TOUCH_I2C SCREEN_DIAG_ONLY
+#endif
+
+#ifndef SCREEN_DIAG_DISABLE_BACKLIGHT_I2C
+#define SCREEN_DIAG_DISABLE_BACKLIGHT_I2C 0
+#endif
+
 #define TFT_WIDTH 800
 #define TFT_HEIGHT 480
 
@@ -187,16 +199,22 @@ LGFX lcd;
 
 static void panel_backlight_on() {
 #if defined(DISPLAY_PROFILE_WAVESHARE_4_3B)
+#if SCREEN_DIAG_DISABLE_BACKLIGHT_I2C
+  Serial.println("[BOOT] backlight I2C disabled by SCREEN_DIAG_DISABLE_BACKLIGHT_I2C");
+#else
   // Waveshare 4.3B: backlight through CH422G I2C expander
   uint8_t v = 0x01;
   Wire.beginTransmission(0x24);
   Wire.write(v);
-  Wire.endTransmission();
+  uint8_t e1 = Wire.endTransmission();
 
   v = 0x1E;
   Wire.beginTransmission(0x38);
   Wire.write(v);
-  Wire.endTransmission();
+  uint8_t e2 = Wire.endTransmission();
+
+  Serial.printf("[BOOT] backlight CH422G endTransmission: e1=%u e2=%u\n", e1, e2);
+#endif
 #else
   pinMode(TFT_BL, OUTPUT);
   digitalWrite(TFT_BL, HIGH);
@@ -237,61 +255,75 @@ void my_touch_read_cb(lv_indev_t * drv, lv_indev_data_t * data) {
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Motorized Injector HMI Starting...");
+  delay(300);
+  Serial.setDebugOutput(true);
+  Serial.println("[BOOT] Motorized Injector HMI Starting...");
 
-  // Initialize shared I2C bus once before any backlight/touch transaction
-  Wire.begin(TOUCH_GT911_SDA, TOUCH_GT911_SCL);
-
-#if defined(DISPLAY_PROFILE_WAVESHARE_4_3B)
-  Serial.println("Display profile: Waveshare 4.3B");
+#if !SCREEN_DIAG_DISABLE_TOUCH_I2C || !SCREEN_DIAG_DISABLE_BACKLIGHT_I2C
+  // Force I2C in master mode explicitly (avoid accidental slave overloads)
+  Wire.begin((int)TOUCH_GT911_SDA, (int)TOUCH_GT911_SCL);
 #else
-  Serial.println("Display profile: Elecrow 5\"");
+  Serial.println("[BOOT] global I2C init skipped by diag flags");
 #endif
 
-  panel_backlight_on();
-  Serial.println("Backlight ON");
+#if defined(DISPLAY_PROFILE_WAVESHARE_4_3B)
+  Serial.println("[BOOT] Display profile: Waveshare 4.3B");
+#else
+  Serial.println("[BOOT] Display profile: Elecrow 5\"");
+#endif
 
-  // Initialize display
+  Serial.println("[BOOT] panel_backlight_on...");
+  panel_backlight_on();
+  Serial.println("[BOOT] panel_backlight_on done");
+
+#if SCREEN_DIAG_DISABLE_TOUCH_I2C
+  Serial.println("[BOOT] touch_init skipped by SCREEN_DIAG_DISABLE_TOUCH_I2C");
+#else
+  Serial.println("[BOOT] touch_init...");
+  touch_init();
+  Serial.println("[BOOT] touch_init done");
+#endif
+
+  Serial.println("[BOOT] lcd.init...");
   lcd.init();
   lcd.setRotation(1);
   lcd.fillScreen(TFT_BLACK);
   delay(200);
+  Serial.printf("[BOOT] Display %dx%d\n", lcd.width(), lcd.height());
 
-  Serial.print("Display ");
-  Serial.print(lcd.width());
-  Serial.print("x");
-  Serial.println(lcd.height());
-
-  // Initialize LVGL
+  Serial.println("[BOOT] lv_init...");
   lv_init();
   lv_tick_set_cb(my_tick_cb);
 
   lv_display_t *display = lv_display_create(TFT_WIDTH, TFT_HEIGHT);
-
   static uint8_t buf[TFT_WIDTH * TFT_HEIGHT / 10 * 2];
   lv_display_set_buffers(display, buf, NULL, sizeof(buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
-
   lv_display_set_flush_cb(display, my_flush_cb);
   lv_display_set_rotation(display, LV_DISPLAY_ROTATION_90);
 
+#if SCREEN_DIAG_DISABLE_TOUCH_I2C
+  Serial.println("[BOOT] LVGL display initialized (touch disabled)");
+#else
   lv_indev_t * indev = lv_indev_create();
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, my_touch_read_cb);
+  Serial.println("[BOOT] LVGL display+input initialized");
+#endif
 
-  Serial.println("Display initialized");
-
+  Serial.println("[BOOT] ui_init...");
   ui_init();
+  Serial.println("[BOOT] ui_init done");
 
   plunger_stateValue plungerStateValue(eez::flow::getGlobalVariable(FLOW_GLOBAL_VARIABLE_PLUNGER_STATE));
   if (plungerStateValue) {
     plungerStateValue.max_barrel_capacity(BARREL_CAPACITY_MM);
   }
 
-  touch_init();
-  Serial.println("Touch initialized");
-
+#if SCREEN_DIAG_ONLY
+  Serial.println("[BOOT] SCREEN_DIAG_ONLY=1 -> comms/prd_ui disabled");
+#else
   DisplayComms::begin(Serial2, DISPLAY_UART_RX_PIN, DISPLAY_UART_TX_PIN, 115200);
-  Serial.printf("Display UART init RX=%d TX=%d\n", DISPLAY_UART_RX_PIN, DISPLAY_UART_TX_PIN);
+  Serial.printf("[BOOT] Display UART init RX=%d TX=%d\n", DISPLAY_UART_RX_PIN, DISPLAY_UART_TX_PIN);
 
   PrdUi::init();
 
@@ -299,14 +331,17 @@ void setup() {
   DisplayComms::sendQueryError();
   DisplayComms::sendQueryMould();
   DisplayComms::sendQueryCommon();
+#endif
 }
 
 void loop() {
   static int16_t lastScreen = -1;
+  static uint32_t lastHeartbeatMs = 0;
 
   lv_timer_handler();
   ui_tick();
 
+#if !SCREEN_DIAG_ONLY
   if (!PrdUi::isInitialized()) {
     PrdUi::init();
   }
@@ -327,6 +362,14 @@ void loop() {
     }
     lastScreen = g_currentScreen;
   }
+#endif
+
+  uint32_t now = ::millis();
+  if (now - lastHeartbeatMs >= 1000) {
+    lastHeartbeatMs = now;
+    Serial.printf("[LOOP] alive t=%lu screen=%d\n", (unsigned long)now, (int)g_currentScreen);
+  }
 
   delay(5);
 }
+
