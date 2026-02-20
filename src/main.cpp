@@ -249,7 +249,16 @@ void setup() {
   Serial.println("GUI Task Created");
 }
 
+extern void handleDebugCommand(const char *cmd);
+
 void loop() {
+  if (Serial.available() > 0) {
+    String line = Serial.readStringUntil('\n');
+    line.trim();
+    if (line.length() > 0) {
+      handleDebugCommand(line.c_str());
+    }
+  }
   static int16_t lastScreen = -1;
   // Free up loop() for non-GUI tasks (e.g. comms)
   // DisplayComms::update();

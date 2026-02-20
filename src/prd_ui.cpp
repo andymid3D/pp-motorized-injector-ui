@@ -2006,3 +2006,32 @@ void tick() {
 bool isInitialized() { return ui.initialized; }
 
 } // namespace PrdUi
+
+void handleDebugCommand(const char *cmd) {
+  if (!cmd)
+    return;
+  Serial.printf("PRD_UI: Debug Command received: %s\n", cmd);
+
+  // Simple MOCK parser: MOCK|STATE|Name or MOCK|POS|Value
+  char buf[64];
+  strncpy(buf, cmd, sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = '\0';
+
+  char *part1 = strtok(buf, "|");
+  if (part1 && strcmp(part1, "MOCK") == 0) {
+    char *part2 = strtok(nullptr, "|");
+    char *part3 = strtok(nullptr, "|");
+    if (part2 && part3) {
+      if (strcmp(part2, "STATE") == 0) {
+        ui.mockEnabled = true;
+        strncpy(ui.mockState, part3, sizeof(ui.mockState) - 1);
+        ui.mockState[sizeof(ui.mockState) - 1] = '\0';
+      } else if (strcmp(part2, "POS") == 0) {
+        ui.mockEnabled = true;
+        ui.mockPos = atof(part3);
+      } else if (strcmp(part2, "OFF") == 0) {
+        ui.mockEnabled = false;
+      }
+    }
+  }
+}
