@@ -52,6 +52,16 @@ constexpr int MOULD_FIELD_TYPE[] = {0, 1, 1, 1, 1, 1, 1, 1,
 constexpr int MOULD_FIELD_COUNT =
     sizeof(MOULD_FIELD_NAMES) / sizeof(MOULD_FIELD_NAMES[0]);
 
+struct RefillBlock {
+  float volume; // cm3
+  uint32_t addedMs;
+  bool active;
+
+  RefillBlock() : volume(0), addedMs(0), active(false) {}
+  RefillBlock(float v, uint32_t a, bool act)
+      : volume(v), addedMs(a), active(act) {}
+};
+
 struct UiState {
   bool initialized = false;
 
@@ -80,7 +90,7 @@ struct UiState {
   lv_obj_t *mouldButtonSave = nullptr;
   lv_obj_t *mouldButtonNew = nullptr;
   lv_obj_t *mouldButtonDelete = nullptr;
-  lv_obj_t *mouldDeleteOverlay = nullptr; // New confirmation overlay
+  lv_obj_t *mouldDeleteOverlay = nullptr;
   lv_obj_t *mouldProfileButtons[MAX_MOULD_PROFILES] = {};
   DisplayComms::MouldParams mouldProfiles[MAX_MOULD_PROFILES] = {};
   int mouldProfileCount = 0;
@@ -97,7 +107,6 @@ struct UiState {
   bool commonDirty = false;
   bool suppressCommonEvents = false;
 
-  // Shared resources
   lv_obj_t *sharedKeyboard = nullptr;
   char lastMouldName[32] = {0};
   lv_obj_t *lastMainScreen = nullptr;
@@ -106,12 +115,24 @@ struct UiState {
   lv_obj_t *lastActiveScreen = nullptr;
   lv_obj_t *activeScrollContainer = nullptr;
 
-  // Mould Edit State (Moved to end for isolation)
   lv_obj_t *rightPanelMouldEdit = nullptr;
   lv_obj_t *mouldEditScroll = nullptr;
   lv_obj_t *mouldEditInputs[MOULD_FIELD_COUNT] = {};
   bool mouldEditDirty = false;
   bool inMouldEditPopulation = false;
+
+  RefillBlock refillBlocks[16];
+  int blockCount = 0;
+  char lastState[24] = "";
+  float startRefillPos = 0;
+  float lastFramePos = 0;
+  bool isRefilling = false;
+  bool refillSequenceActive =
+      false; // New flag for strictly tracking REFILL -> ... -> READY sequence
+
+  bool mockEnabled = false;
+  float mockPos = 0;
+  char mockState[24] = "";
 };
 
 UiState ui;
@@ -137,13 +158,15 @@ static void async_scroll_to_view(void *target) {
 }
 
 float turnsToCm3(float turns) {
-  static const float TURNS_PER_CM3 = 0.99925f;
-  if (TURNS_PER_CM3 == 0.0f) {
-    return 0.0f;
-  }
-  return turns / TURNS_PER_CM3;
+  // Correct Mapping based on 22->360 Refill:
+  // 22.53 = Full (Volume 0 relative to stroke start? No, Volume 0 of
+  // accumulated shot). 360.5 = Empty (Volume 338 of accumulated shot). So
+  // Volume = (turns - 22.53). If turns < 22.53, Vol = 0.
+  float vol = turns - 22.53f;
+  if (vol < 0)
+    vol = 0;
+  return vol;
 }
-
 void setButtonEnabled(lv_obj_t *button, bool enabled) {
   if (!button) {
     return;
@@ -507,8 +530,7 @@ void updateLeftReadouts(const DisplayComms::Status &status) {
   char posText[40];
   char tempText[40];
 
-  snprintf(posText, sizeof(posText), "%.2f cm3",
-           turnsToCm3(status.encoderTurns));
+  snprintf(posText, sizeof(posText), "%.2f", status.encoderTurns);
   snprintf(tempText, sizeof(tempText), "%.1f C", status.tempC);
 
   setLabelTextIfChanged(ui.posLabelMain, posText);
@@ -1647,6 +1669,242 @@ void init() {
   Serial.println("PRD_UI: init basic state complete");
 }
 
+void updateRefillBlocks(const DisplayComms::Status &status) {
+  float currentPos = status.encoderTurns;
+  const char *state = status.state;
+
+  // 1. Start Sequence: Entering REFILL
+  if (strcmp(state, "REFILL") == 0) {
+    if (!ui.refillSequenceActive) {
+      ui.refillSequenceActive = true;
+      // Capture start position. During Refill, plunger moves UP (turns
+      // decrease).
+      ui.startRefillPos = currentPos;
+      Serial.printf("PRD_UI: Refill Sequence Started at %.2f\n", currentPos);
+    }
+    ui.isRefilling = true;
+  } else {
+    ui.isRefilling = false;
+  }
+
+  // 2. End Sequence: Entering READY_TO_INJECT
+  if (strcmp(state, "READY_TO_INJECT") == 0 &&
+      strcmp(ui.lastState, "READY_TO_INJECT") != 0 && ui.refillSequenceActive) {
+
+    // Calculate total geometric space between Bottom (360.5) and Plunger
+    // (currentPos)
+    float spaceBelowPlunger = 360.5f - currentPos;
+    if (spaceBelowPlunger < 0)
+      spaceBelowPlunger = 0;
+
+    // Calculate how much volume is already occupied by existing blocks
+    float existingVolume = 0.0f;
+    for (int i = 0; i < ui.blockCount; i++) {
+      existingVolume += ui.refillBlocks[i].volume;
+    }
+
+    // New block fills whatever physical space remains
+    float delta = spaceBelowPlunger - existingVolume;
+
+    // Only add positive blocks (real refills)
+    if (delta > 0.5f) {
+      if (ui.blockCount < 16) {
+        ui.refillBlocks[ui.blockCount] = RefillBlock(delta, millis(), true);
+        ui.blockCount++;
+        Serial.printf("PRD_UI: Block added. Vol: %.2f. SpaceBelow: %.2f "
+                      "Existing: %.2f Cur: %.2f. "
+                      "Count: %d\n",
+                      delta, spaceBelowPlunger, existingVolume, currentPos,
+                      ui.blockCount);
+      } else {
+        Serial.println("PRD_UI: Block limit reached!");
+      }
+    } else {
+      Serial.printf("PRD_UI: Ignored invalid block. Vol: %.2f. SpaceBelow: "
+                    "%.2f Existing: %.2f "
+                    "Cur: %.2f\n",
+                    delta, spaceBelowPlunger, existingVolume, currentPos);
+    }
+    ui.refillSequenceActive = false; // Sequence complete
+  }
+
+  // 3. Consumption Logic (Injection)
+  // Injection moves Plunger DOWN, so turns INCREASE.
+  if (currentPos > ui.lastFramePos) {
+    float consumedCm3 = currentPos - ui.lastFramePos;
+
+    // Ignore small jitters or massive jumps (e.g. wrapping)
+    if (consumedCm3 > 0.001f && consumedCm3 < 100.0f) {
+      while (consumedCm3 > 0.001f && ui.blockCount > 0) {
+        if (ui.refillBlocks[0].volume > consumedCm3) {
+          ui.refillBlocks[0].volume -= consumedCm3;
+          consumedCm3 = 0;
+        } else {
+          consumedCm3 -= ui.refillBlocks[0].volume;
+          // Shift blocks
+          for (int i = 0; i < ui.blockCount - 1; i++) {
+            ui.refillBlocks[i] = ui.refillBlocks[i + 1];
+          }
+          ui.blockCount--;
+          ui.refillBlocks[ui.blockCount] = RefillBlock();
+        }
+      }
+    }
+  }
+
+  ui.lastFramePos = currentPos;
+  strncpy(ui.lastState, state, sizeof(ui.lastState) - 1);
+}
+void updatePlungerPosition(float turns) {
+  // Plunger/Rod Movement Logic
+  // The plunger object (rod) sits on top of the barrel interior.
+  // When empty (turns=0), it should be at Y=0 (fully covering the barrel).
+  // When full (turns=MAX), it should be at Y=-Height (fully retracted).
+  // We use the same scale as the blocks to ensure the tip matches the stack
+  // height.
+
+  // Visual Calibration:
+  // User reports a gap (plunger too high relative to blocks).
+  // User reports blocks centered too far right.
+
+  // Exact linear mapping based directly on physical encoder turns.
+  // 360.5 turns = Tip Bottom at Y=791 (Lifted 2px off UI edge).
+  // 22.53 turns = Tip Top exactly at Y=0 (Edge of the gray square).
+  // Total Tip Travel: 711 - 0 = 711px. (Since Tip Bottom 791 - Tip 80 = 711 Tip
+  // Top). Scale factor: 711px / (360.5 - 22.53) turns = 2.1037 px/turn
+  static const float MAX_TURNS = 360.5f;
+  static const float PX_PER_TURN = 711.0f / (360.5f - 22.53f); // ~2.1037f
+
+  // The plunger tip is fixed at Y=700 inside the plunger container.
+  static const int TIP_ANCHOR_Y = 700;
+
+  float clampedTurns = turns;
+  if (clampedTurns < 0.0f)
+    clampedTurns = 0.0f;
+  if (clampedTurns > MAX_TURNS)
+    clampedTurns = MAX_TURNS;
+
+  // Formula: TipY = (turns - 22.53) * scale. Plunger Y = TipY - Anchor.
+  float targetTipY = (clampedTurns - 22.53f) * PX_PER_TURN;
+  int yOffset = static_cast<int>(targetTipY) - TIP_ANCHOR_Y;
+
+  // Safety Clamping
+  if (yOffset < -750)
+    yOffset = -750;
+  if (yOffset > 13)
+    yOffset = 13;
+
+  // Apply to all plunger objects
+  if (isObjReady(objects.plunger_tip__plunger))
+    lv_obj_set_y(objects.plunger_tip__plunger, yOffset);
+  if (isObjReady(objects.obj0__plunger))
+    lv_obj_set_y(objects.obj0__plunger, yOffset);
+  if (isObjReady(objects.obj2__plunger))
+    lv_obj_set_y(objects.obj2__plunger, yOffset);
+  if (isObjReady(objects.obj5__plunger))
+    lv_obj_set_y(objects.obj5__plunger, yOffset);
+}
+
+void renderRefillBlocksForBands(lv_obj_t **bands) {
+  if (!bands)
+    return;
+
+  // Using 2.1037f to perfectly match Plunger's pixels-per-turn mapping.
+  static const float PX_PER_TURN = 711.0f / (360.5f - 22.53f);
+
+  if (ui.blockCount > 0) {
+    Serial.printf("PRD_UI: Render Blocks count=%d. PX_PER_TURN=%.2f\n",
+                  ui.blockCount, PX_PER_TURN);
+  }
+
+  int y = 791; // Bottom of barrel is 791px (lifted from edge).
+  uint32_t now = millis();
+
+  for (int i = 0; i < 16; i++) {
+    lv_obj_t *band = bands[i];
+    if (!isObjReady(band))
+      continue;
+
+    if (i < ui.blockCount) {
+      int h = static_cast<int>(ui.refillBlocks[i].volume * PX_PER_TURN);
+      if (h < 1)
+        h = 1;
+      y -= h;
+
+      // Serial.printf("PRD_UI: Band %d. Vol=%.2f H=%d Y=%d\n", i,
+      // ui.refillBlocks[i].volume, h, y);
+
+      lv_obj_set_size(band, 80, h);
+      // Shift left by setting X to -8 relative to container
+      // Container X=10. X=-8 -> Abs X=2. Plunger Abs X=20...?
+      // User requested total 8px left shift relative to original.
+      lv_obj_set_pos(band, -8, y);
+      lv_obj_remove_flag(band, LV_OBJ_FLAG_HIDDEN);
+
+      // Color based on age (millis)
+      // 0-10s: Blue, 10-30s: Orange, 30s+: Red
+      uint32_t age = now - ui.refillBlocks[i].addedMs;
+      lv_color_t color;
+      if (age < 10000)
+        color = lv_color_hex(0x3498db); // Blue
+      else if (age < 30000)
+        color = lv_color_hex(0xe67e22); // Orange
+      else
+        color = lv_color_hex(0xe74c3c); // Red
+      lv_obj_set_style_bg_color(band, color, LV_PART_MAIN | LV_STATE_DEFAULT);
+    } else {
+      lv_obj_add_flag(band, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+}
+
+void renderAllPlungers() {
+  // We need to gather the bands for each screen.
+  // The objects struct has them in groups of 16.
+  // indices based on screens.c:
+  // Main/plunger_tip: 4 + 2 = 6
+  // Main/obj0: 27 + 2 = 29
+  // Mould/obj2: 56 + 2 = 58
+  // Common/obj5: 102 + 2 = 104
+
+  lv_obj_t **allObjects = (lv_obj_t **)&objects;
+
+  renderRefillBlocksForBands(&allObjects[6]);
+  renderRefillBlocksForBands(&allObjects[29]);
+  renderRefillBlocksForBands(&allObjects[58]);
+  renderRefillBlocksForBands(&allObjects[104]);
+}
+
+void handleDebugCommand(const char *cmd) {
+  if (!cmd)
+    return;
+  Serial.printf("PRD_UI: Debug Command received: %s\n", cmd);
+
+  // Simple MOCK parser: MOCK|STATE|Name or MOCK|POS|Value
+  char buf[64];
+  strncpy(buf, cmd, sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = '\0';
+
+  char *part1 = strtok(buf, "|");
+  if (part1 && strcmp(part1, "MOCK") == 0) {
+    char *part2 = strtok(nullptr, "|");
+    char *part3 = strtok(nullptr, "|");
+    if (part2 && part3) {
+      DisplayComms::Status mockStatus = DisplayComms::getStatus();
+      if (strcmp(part2, "STATE") == 0) {
+        ui.mockEnabled = true;
+        strncpy(ui.mockState, part3, sizeof(ui.mockState) - 1);
+        ui.mockState[sizeof(ui.mockState) - 1] = '\0';
+      } else if (strcmp(part2, "POS") == 0) {
+        ui.mockEnabled = true;
+        ui.mockPos = atof(part3);
+      } else if (strcmp(part2, "OFF") == 0) {
+        ui.mockEnabled = false;
+      }
+    }
+  }
+}
+
 void tick() {
   if (!ui.initialized) {
     return;
@@ -1655,7 +1913,8 @@ void tick() {
   lv_obj_t *active = lv_screen_active();
 
   // lifecycle Management: Purge panels when LEAVING a screen to save RAM
-  // Move this to the TOP to free memory before we try to build the next screen
+  // Move this to the TOP to free memory before we try to build the next
+  // screen
   if (ui.lastActiveScreen && active != ui.lastActiveScreen) {
     if (ui.lastActiveScreen == objects.mould_settings)
       purgeMouldPanels();
@@ -1711,13 +1970,23 @@ void tick() {
     ui.rightPanelMain = nullptr;
   }
 
-  const DisplayComms::Status &status = DisplayComms::getStatus();
+  const DisplayComms::Status &realStatus = DisplayComms::getStatus();
+  DisplayComms::Status status = realStatus;
+  if (ui.mockEnabled) {
+    status.encoderTurns = ui.mockPos;
+    strncpy(status.state, ui.mockState, sizeof(status.state) - 1);
+    status.state[sizeof(status.state) - 1] = '\0';
+  }
+
   const DisplayComms::MouldParams &mould = DisplayComms::getMould();
   const DisplayComms::CommonParams &common = DisplayComms::getCommon();
 
   updateLeftReadouts(status);
+  updateRefillBlocks(status);
+  updatePlungerPosition(status.encoderTurns);
   updateStateWidgets(status);
   updateErrorFrames(status);
+  renderAllPlungers();
   if (isObjReady(ui.mouldList) &&
       !lv_obj_has_flag(ui.mouldList, LV_OBJ_FLAG_HIDDEN)) {
     updateMouldListFromComms(mould);
